@@ -1,4 +1,4 @@
-name: 'azure-keyvault-secrets'
+name: 'get-azure-keyvault-secrets'
 description: 'Get all the Azure KeyVault Secrets and inject them as Environment variables for your github actions'
 branding:
   icon: 'lock'
