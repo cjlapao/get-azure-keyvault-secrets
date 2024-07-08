@@ -1,6 +1,7 @@
 import * as core from '@actions/core'
 import { SecretClient, SecretProperties } from '@azure/keyvault-secrets'
 import { getClient, getSecret } from './client'
+import { sep } from 'path'
 
 export async function processSecrets(
   client: SecretClient,
@@ -10,8 +11,11 @@ export async function processSecrets(
   for (const secret of secrets) {
     if (secret.enabled) {
       const value = await getSecret(client, secret.name)
-      const regexp = new RegExp(separator, 'g')
-      const exportedSecretName = secret.name.replace(regexp, '.').toLowerCase()
+      let exportedSecretName = secret.name.toLowerCase()
+      if (separator) {
+        const regexp = new RegExp(separator, 'g')
+        exportedSecretName = secret.name.replace(regexp, '__').toLowerCase()
+      }
       core.exportVariable(exportedSecretName, value)
       console.log(
         `Exported secret ${exportedSecretName} to environment variables`
