@@ -4,19 +4,19 @@ branding:
   icon: 'lock'
   color: 'blue'
 inputs:
-  keyvault-name:
+  KEYVAULT-NAME:
     description: 'The name of the Azure KeyVault'
     required: true
-  client-id:
+  CLIENT-ID:
     description: 'The Client ID of the Azure KeyVault'
     required: true
-  client-secret:
+  CLIENT-SECRET:
     description: 'The Client Secret of the Azure KeyVault'
     required: true
-  tenant-id:
+  TENANT-ID:
     description: 'The Tenant ID of the Azure KeyVault'
     required: true
-  separator:
+  SEPARATOR:
     description: 'The separator to use to separate the key and value of the secret'
     required: false
     default: '--'

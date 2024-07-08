@@ -10,8 +10,11 @@ import { processSecrets } from './secrets'
 export async function run(): Promise<void> {
   try {
     const keyVaultName = core.getInput('keyvault-name')
+    if (core.isDebug()) {
+      console.log(`KeyVault name: ${keyVaultName}`)
+    }
     if (!keyVaultName) {
-      throw new Error('The keyvault_name input is required')
+      throw new Error('The keyvault-name input is required')
     }
     const credentials = getCredentials()
     console.log(`Getting secrets from ${keyVaultName}...`)
