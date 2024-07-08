@@ -17,9 +17,12 @@ export async function processSecrets(
         exportedSecretName = secret.name.replace(regexp, '__').toLowerCase()
       }
       core.exportVariable(exportedSecretName, value)
-      console.log(
-        `Exported secret ${exportedSecretName} to environment variables`
-      )
+      if (core.isDebug()) {
+        console.log(
+          `Exported secret ${exportedSecretName} to environment variables`
+        )
+      }
     }
   }
+  console.log(`Exported ${secrets.length} secrets to environment variables`)
 }
