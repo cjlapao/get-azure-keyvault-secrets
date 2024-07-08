@@ -11,7 +11,7 @@ It takes a github-token as an input. See [how to create and store a token](https
 
 ```yml
 - name: Get Azure KeyVault Secrets
-  uses: cjlapao/get-azure-keyvault-secrets
+  uses: cjlapao/get-azure-keyvault-secrets@v1
   with:
     TENANT-ID: ${{ secrets.TENANT_ID }}
     CLIENT-ID: ${{ secrets.CLIENT_ID }}
@@ -23,7 +23,7 @@ You can also use a separator to replace the values to a secret.sub-secret format
 
 ```yml
 - name: Get Azure KeyVault Secrets
-  uses: cjlapao/get-azure-keyvault-secrets
+  uses: cjlapao/get-azure-keyvault-secrets@v1
   with:
     TENANT-ID: ${{ secrets.TENANT_ID }}
     CLIENT-ID: ${{ secrets.CLIENT_ID }}
