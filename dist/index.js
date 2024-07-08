@@ -41027,6 +41027,7 @@ async function processSecrets(client, secrets) {
                 const regexp = new RegExp(separator, 'g');
                 exportedSecretName = secret.name.replace(regexp, '__').toLowerCase();
             }
+            core.setSecret(value);
             core.exportVariable(exportedSecretName, value);
             if (core.isDebug()) {
                 console.log(`Exported secret ${exportedSecretName} to environment variables`);
