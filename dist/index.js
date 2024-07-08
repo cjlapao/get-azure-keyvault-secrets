@@ -40959,10 +40959,13 @@ const secrets_1 = __nccwpck_require__(1918);
  */
 async function run() {
     try {
-        core.getInput('operation');
+        const d = { required: true };
         const keyVaultName = core.getInput('keyvault_name');
+        if (core.isDebug()) {
+            console.log(`KeyVault name: ${keyVaultName}`);
+        }
         if (!keyVaultName) {
-            throw new Error('The keyvault_name input is required');
+            throw new Error('The keyvault-name input is required');
         }
         const credentials = (0, client_1.getCredentials)();
         console.log(`Getting secrets from ${keyVaultName}...`);
@@ -41019,12 +41022,18 @@ async function processSecrets(client, secrets) {
     for (const secret of secrets) {
         if (secret.enabled) {
             const value = await (0, client_1.getSecret)(client, secret.name);
-            const regexp = new RegExp(separator, 'g');
-            const exportedSecretName = secret.name.replace(regexp, '.');
+            let exportedSecretName = secret.name.toLowerCase();
+            if (separator) {
+                const regexp = new RegExp(separator, 'g');
+                exportedSecretName = secret.name.replace(regexp, '__').toLowerCase();
+            }
             core.exportVariable(exportedSecretName, value);
-            console.log(`Exported secret ${exportedSecretName} to environment variables`);
+            if (core.isDebug()) {
+                console.log(`Exported secret ${exportedSecretName} to environment variables`);
+            }
         }
     }
+    console.log(`Exported ${secrets.length} secrets to environment variables`);
 }
 
 

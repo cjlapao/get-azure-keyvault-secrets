@@ -1,6 +1,5 @@
 import * as core from '@actions/core'
 import { getClient, getCredentials, getSecrets } from './client'
-import { get } from 'http'
 import { processSecrets } from './secrets'
 
 /**
@@ -9,7 +8,8 @@ import { processSecrets } from './secrets'
  */
 export async function run(): Promise<void> {
   try {
-    const keyVaultName = core.getInput('keyvault-name')
+    const d: core.InputOptions = { required: true } 
+    const keyVaultName = core.getInput('keyvault_name')
     if (core.isDebug()) {
       console.log(`KeyVault name: ${keyVaultName}`)
     }

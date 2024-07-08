@@ -4,9 +4,9 @@ import { ClientSecretCredential, DefaultAzureCredential } from '@azure/identity'
 import { SecretClient, SecretProperties } from '@azure/keyvault-secrets'
 
 export function getCredentials(): ClientSecretCredential {
-  const tenantId = core.getInput('tenant-id')
-  const clientId = core.getInput('client-id')
-  const clientSecret = core.getInput('client-secret')
+  const tenantId = core.getInput('tenant_id')
+  const clientId = core.getInput('client_id')
+  const clientSecret = core.getInput('client_secret')
   if (!tenantId) {
     throw new Error('The tenant_id input is required')
   }
