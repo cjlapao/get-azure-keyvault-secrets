@@ -16,7 +16,11 @@ export async function processSecrets(
         const regexp = new RegExp(separator, 'g')
         exportedSecretName = secret.name.replace(regexp, '__').toLowerCase()
       }
-      core.setSecret(value)
+      if (value) {
+        core.setSecret(value)
+      } else {
+        console.log(`Secret ${secret.name} is empty`)
+      }
       core.exportVariable(exportedSecretName, value)
       if (core.isDebug()) {
         console.log(
