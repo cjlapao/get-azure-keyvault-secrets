@@ -11,7 +11,7 @@ export async function processSecrets(
     if (secret.enabled) {
       const value = await getSecret(client, secret.name)
       const regexp = new RegExp(separator, 'g')
-      const exportedSecretName = secret.name.replace(regexp, '.')
+      const exportedSecretName = secret.name.replace(regexp, '.').toLowerCase()
       core.exportVariable(exportedSecretName, value)
       console.log(
         `Exported secret ${exportedSecretName} to environment variables`

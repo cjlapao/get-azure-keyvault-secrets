@@ -9,8 +9,7 @@ import { processSecrets } from './secrets'
  */
 export async function run(): Promise<void> {
   try {
-    core.getInput('operation')
-    const keyVaultName = core.getInput('keyvault_name')
+    const keyVaultName = core.getInput('keyvault-name')
     if (!keyVaultName) {
       throw new Error('The keyvault_name input is required')
     }

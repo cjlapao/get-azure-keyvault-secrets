@@ -1,13 +1,22 @@
-name: 'Wait'
-description: 'Wait a designated number of milliseconds'
+name: 'cjlapao-azure-keyvault-secrets'
+description: 'Get all the Azure KeyVault Secrets and inject them as Environment variables for your github actions'
 inputs:
-  milliseconds:  # id of input
-    description: 'number of milliseconds to wait'
+  keyvault-name:
+    description: 'The name of the Azure KeyVault'
     required: true
-    default: '1000'
-outputs:
-  time: # output will be available to future steps
-    description: 'The message to output'
+  client-id:
+    description: 'The Client ID of the Azure KeyVault'
+    required: true
+  client-secret:
+    description: 'The Client Secret of the Azure KeyVault'
+    required: true
+  tenant-id:
+    description: 'The Tenant ID of the Azure KeyVault'
+    required: true
+  separator:
+    description: 'The separator to use to separate the key and value of the secret'
+    required: false
+    default: '--'
 runs:
-  using: 'node12'
+  using: 'node20'
   main: 'dist/index.js'

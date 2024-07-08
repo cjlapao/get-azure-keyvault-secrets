@@ -1,6 +1,6 @@
 {
-	"name": "Get Azure KeyVault Secrets",
-	"version": "1.0.0",
+	"name": "cjlapao-azure-keyvault-secrets",
+	"version": "0.1.0",
 	"description": "Get all the Azure KeyVault Secrets and inject them as Environment variables for your github actions",
 	"repository": {
 		"type": "git",
