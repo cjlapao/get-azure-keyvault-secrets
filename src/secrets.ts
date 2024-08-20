@@ -1,7 +1,6 @@
 import * as core from '@actions/core'
 import { SecretClient, SecretProperties } from '@azure/keyvault-secrets'
-import { getClient, getSecret } from './client'
-import { sep } from 'path'
+import { getSecret } from './client'
 
 export async function processSecrets(
   client: SecretClient,

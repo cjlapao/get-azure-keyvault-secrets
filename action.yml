@@ -1,5 +1,7 @@
 name: 'get-azure-keyvault-secrets'
-description: 'Get all the Azure KeyVault Secrets and inject them as Environment variables for your github actions'
+description:
+  'Get all the Azure KeyVault Secrets and inject them as Environment variables
+  for your github actions'
 branding:
   icon: 'lock'
   color: 'blue'
@@ -17,7 +19,8 @@ inputs:
     description: 'The Tenant ID of the Azure KeyVault'
     required: true
   separator:
-    description: 'The separator to use to separate the key and value of the secret'
+    description:
+      'The separator to use to separate the key and value of the secret'
     required: false
     default: '--'
 runs:

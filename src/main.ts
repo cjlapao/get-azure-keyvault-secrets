@@ -8,7 +8,7 @@ import { processSecrets } from './secrets'
  */
 export async function run(): Promise<void> {
   try {
-    const d: core.InputOptions = { required: true } 
+    const d: core.InputOptions = { required: true }
     const keyVaultName = core.getInput('keyvault_name')
     if (core.isDebug()) {
       console.log(`KeyVault name: ${keyVaultName}`)

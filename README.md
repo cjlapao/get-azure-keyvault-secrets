@@ -5,7 +5,8 @@
 
 ## Inputs
 
-It takes a github-token as an input. See [how to create and store a token](https://docs.github.com/en/actions/configuring-and-managing-workflows/creating-and-storing-encrypted-secrets)
+It takes a github-token as an input. See
+[how to create and store a token](https://docs.github.com/en/actions/configuring-and-managing-workflows/creating-and-storing-encrypted-secrets)
 
 ## Example Usage
 
