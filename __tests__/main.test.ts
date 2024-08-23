@@ -260,7 +260,6 @@ describe('run', () => {
     getInputMock.mockReturnValueOnce('8')
     getInputMock.mockReturnValueOnce('true')
 
-
     const client = new clientMock('myKeyVault')
     const getSecretsSpy = jest
       .spyOn(clientMock.prototype, 'getSecrets')
@@ -271,21 +270,9 @@ describe('run', () => {
       )
 
     await run()
-    expect(setOutputMock).toHaveBeenCalledWith(
-      'secret1',
-      'secret1Value'
-    )
-    expect(setOutputMock).toHaveBeenCalledWith(
-      'secret2',
-      'secret2Value'
-    )
-    expect(exportVariableMock).toHaveBeenCalledWith(
-      'secret1',
-      'secret1Value'
-    )
-    expect(exportVariableMock).toHaveBeenCalledWith(
-      'secret2',
-      'secret2Value'
-    )
+    expect(setOutputMock).toHaveBeenCalledWith('secret1', 'secret1Value')
+    expect(setOutputMock).toHaveBeenCalledWith('secret2', 'secret2Value')
+    expect(exportVariableMock).toHaveBeenCalledWith('secret1', 'secret1Value')
+    expect(exportVariableMock).toHaveBeenCalledWith('secret2', 'secret2Value')
   })
 })

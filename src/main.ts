@@ -33,10 +33,12 @@ export async function run(): Promise<void> {
     console.log('Creating Keyvault client...')
     const client = new Client(keyVaultNameInput)
     console.log('Getting Secrets...')
-    
+
     // For testing purposes, if the keyvault name is ci-action-test-keyvault
     if (keyVaultNameInput == 'ci-action-test-keyvault') {
-      console.log('KeyVault name is ci-action-test-keyvault, exiting for testing purposes and setting output')
+      console.log(
+        'KeyVault name is ci-action-test-keyvault, exiting for testing purposes and setting output'
+      )
       setOutput('secret1', 'secret1Value')
       setOutput('secret2', 'secret2Value')
       exportVariable('secret1', 'secret1Value')
