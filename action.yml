@@ -1,10 +1,11 @@
 name: 'get-azure-keyvault-secrets'
 description:
-  'Get all the Azure KeyVault Secrets and inject them as Environment variables
-  for your github actions'
+  'Get Azure KeyVault Secrets and either inject them as Environment variables or
+  as outputs for your github actions'
 branding:
   icon: 'lock'
   color: 'blue'
+author: 'Carlos Lapao'
 inputs:
   keyvault_name:
     description: 'The name of the Azure KeyVault'
@@ -19,10 +20,69 @@ inputs:
     description: 'The Tenant ID of the Azure KeyVault'
     required: true
   separator:
-    description:
-      'The separator to use to separate the key and value of the secret'
+    description: |-
+      This will allow you to replace separators in you secret names with a
+      more compatible character for the environment variables. For example, if
+      you have a secret named `my::secret` and you want to replace `::` with `_`,
+      you can set this to `::` and the secret will be injected as `my_secret`
     required: false
-    default: '--'
+  export_to_env:
+    description: |-
+      This will export the secrets as environment variables besides the default
+      behavior of exporting them as output from the step
+    required: false
+    default: 'false'
+  secrets:
+    description: |-
+      The list of secrets to access and inject into the
+      environment. Due to limitations with GitHub Actions inputs, this is
+      specified as a string.
+
+      You can specify multiple secrets by adding each secret on a new line.
+      for example:
+      ```yaml
+      secrets: |
+        secret1
+        secret2
+      ```
+
+      if nothing is specified, all the secrets will be fetched
+    required: false
+  min_mask_length:
+    description: |-
+      Minimum line length for a secret to be masked. Extremely short secrets
+      (e.g. `{` or `a`) can make GitHub Actions log output unreadable. This is
+      especially important for multi-line secrets, since each line of the secret
+      is masked independently.
+    required: false
+    default: '4'
+outputs:
+  secrets:
+    description: |-
+      The list of secrets fetched from the Azure KeyVault and each secret is prefixed
+      with an output name. For example:
+        
+      ```yaml
+      jobs:
+        job_id:
+          steps:
+            - name: get-secrets
+              id: get-secrets
+              uses: cjlapao/get-azure-keyvault-secrets@v1
+              with:
+                keyvault_name: 'my-keyvault'
+                client_id: ${{ secrets.AZURE_CLIENT_ID }}
+                client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+                tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+                secrets: |
+                  secret1
+                  secret2
+      ```
+      it will be available as:
+      ```text
+      steps.get-secrets.outputs.secret1
+      steps.get-secrets.outputs.secret2
+      ```
 runs:
   using: 'node20'
   main: 'dist/index.js'

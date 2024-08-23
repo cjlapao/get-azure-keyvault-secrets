@@ -1,4 +1,4 @@
-/******/ (() => { // webpackBootstrap
+require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
 /***/ 7351:
@@ -40090,177 +40090,172 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getCredentials = getCredentials;
-exports.getDefaultCredentials = getDefaultCredentials;
-exports.getClient = getClient;
-exports.getSecret = getSecret;
-exports.getSecrets = getSecrets;
+exports.Client = void 0;
 const core = __importStar(__nccwpck_require__(2186));
 const identity_1 = __nccwpck_require__(3084);
 const keyvault_secrets_1 = __nccwpck_require__(181);
-function getCredentials() {
-    const tenantId = core.getInput('tenant_id');
-    const clientId = core.getInput('client_id');
-    const clientSecret = core.getInput('client_secret');
-    if (!tenantId) {
-        throw new Error('The tenant_id input is required');
-    }
-    if (!clientId) {
-        throw new Error('The client_id input is required');
-    }
-    if (!clientSecret) {
-        throw new Error('The client_secret input is required');
-    }
-    const credentials = new identity_1.ClientSecretCredential(tenantId, clientId, clientSecret);
-    return credentials;
-}
-function getDefaultCredentials() {
-    const credentials = new identity_1.DefaultAzureCredential();
-    return credentials;
-}
-function getClient(keyVaultName, credentials) {
-    const url = `https://${keyVaultName}.vault.azure.net`;
-    const client = new keyvault_secrets_1.SecretClient(url, credentials);
-    return client;
-}
-async function getSecret(client, secretName) {
-    const secret = await client.getSecret(secretName);
-    return secret.value ?? '';
-}
-async function getSecrets(client) {
-    const result = [];
-    for await (const secretProperties of client.listPropertiesOfSecrets()) {
-        if (core.isDebug()) {
-            console.log(secretProperties.name);
+class Client {
+    _client;
+    constructor(keyVaultName, credentials = undefined) {
+        const url = `https://${keyVaultName}.vault.azure.net`;
+        let clientCredentials;
+        if (!credentials) {
+            clientCredentials = this.getCredentials();
         }
-        result.push(secretProperties);
-    }
-    return result;
-}
-
-
-/***/ }),
-
-/***/ 399:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.run = run;
-const core = __importStar(__nccwpck_require__(2186));
-const client_1 = __nccwpck_require__(4970);
-const secrets_1 = __nccwpck_require__(1918);
-/**
- * The main function for the action.
- * @returns {Promise<void>} Resolves when the action is complete.
- */
-async function run() {
-    try {
-        const d = { required: true };
-        const keyVaultName = core.getInput('keyvault_name');
-        if (core.isDebug()) {
-            console.log(`KeyVault name: ${keyVaultName}`);
+        else if (credentials?.userDefaultCredentials) {
+            clientCredentials = this.getDefaultCredentials();
         }
-        if (!keyVaultName) {
-            throw new Error('The keyvault-name input is required');
+        else {
+            if (!credentials?.tenantId) {
+                throw new Error('The tenant_id input is required');
+            }
+            if (!credentials?.clientId) {
+                throw new Error('The client_id input is required');
+            }
+            if (!credentials?.clientSecret) {
+                throw new Error('The client_secret input is required');
+            }
+            clientCredentials = new identity_1.ClientSecretCredential(credentials.tenantId, credentials.clientId, credentials.clientSecret);
         }
-        const credentials = (0, client_1.getCredentials)();
-        console.log(`Getting secrets from ${keyVaultName}...`);
-        const client = (0, client_1.getClient)(keyVaultName, credentials);
-        const secrets = await (0, client_1.getSecrets)(client);
-        console.log('Processing secrets...');
-        await (0, secrets_1.processSecrets)(client, secrets);
+        this._client = new keyvault_secrets_1.SecretClient(url, clientCredentials);
     }
-    catch (error) {
-        // Fail the workflow run if an error occurs
-        console.error(error);
-        if (error instanceof Error)
-            core.setFailed(error.message);
+    getCredentials() {
+        const tenantId = core.getInput('tenant_id');
+        const clientId = core.getInput('client_id');
+        const clientSecret = core.getInput('client_secret');
+        if (!tenantId) {
+            throw new Error('The tenant_id input is required');
+        }
+        if (!clientId) {
+            throw new Error('The client_id input is required');
+        }
+        if (!clientSecret) {
+            throw new Error('The client_secret input is required');
+        }
+        const credentials = new identity_1.ClientSecretCredential(tenantId, clientId, clientSecret);
+        return credentials;
     }
-}
-
-
-/***/ }),
-
-/***/ 1918:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
+    getDefaultCredentials() {
+        const credentials = new identity_1.DefaultAzureCredential();
+        return credentials;
     }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.processSecrets = processSecrets;
-const core = __importStar(__nccwpck_require__(2186));
-const client_1 = __nccwpck_require__(4970);
-async function processSecrets(client, secrets) {
-    const separator = core.getInput('separator');
-    for (const secret of secrets) {
-        if (secret.enabled) {
-            const value = await (0, client_1.getSecret)(client, secret.name);
-            let exportedSecretName = secret.name.toLowerCase();
-            if (separator) {
-                const regexp = new RegExp(separator, 'g');
-                exportedSecretName = secret.name.replace(regexp, '__').toLowerCase();
+    async getSecret(secretName) {
+        const azureSecret = await this._client.getSecret(secretName);
+        const secret = {
+            name: azureSecret.name,
+            value: azureSecret.value ?? '',
+            enabled: azureSecret.properties?.enabled ?? false
+        };
+        return secret;
+    }
+    async getSecrets(names) {
+        const result = [];
+        for await (const secretProperties of this._client.listPropertiesOfSecrets()) {
+            if (secretProperties.enabled === false) {
+                continue;
             }
-            if (value) {
-                core.setSecret(value);
+            if (names.length > 0 && !names.includes(secretProperties.name)) {
+                continue;
             }
-            else {
-                console.log(`Secret ${secret.name} is empty`);
-            }
-            core.exportVariable(exportedSecretName, value);
             if (core.isDebug()) {
-                console.log(`Exported secret ${exportedSecretName} to environment variables`);
+                console.log(secretProperties.name);
             }
+            const secretValue = await this.getSecret(secretProperties.name);
+            const secret = {
+                name: secretProperties.name,
+                value: secretValue.value,
+                enabled: secretProperties.enabled ?? false
+            };
+            result.push(secret);
         }
+        return result;
     }
-    console.log(`Exported ${secrets.length} secrets to environment variables`);
+    async getAllSecrets(onlyActive = false) {
+        const result = [];
+        for await (const secretProperties of this._client.listPropertiesOfSecrets()) {
+            if (core.isDebug()) {
+                console.log(secretProperties.name);
+            }
+            if (onlyActive && secretProperties.enabled === false) {
+                continue;
+            }
+            const secretValue = await this.getSecret(secretProperties.name);
+            const secret = {
+                name: secretProperties.name,
+                value: secretValue.value,
+                enabled: secretProperties.enabled ?? false
+            };
+            result.push(secret);
+        }
+        return result;
+    }
+}
+exports.Client = Client;
+
+
+/***/ }),
+
+/***/ 3015:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isDebug = isDebug;
+exports.parseNumber = parseNumber;
+exports.parseBoolean = parseBoolean;
+function isDebug() {
+    return process.env['RUNNER_DEBUG'] === '1';
+}
+function parseNumber(value, defaultValue) {
+    if (!value) {
+        return defaultValue;
+    }
+    const int = parseInt(value, 10);
+    if (isNaN(int)) {
+        return defaultValue;
+    }
+    return int;
+}
+function parseBoolean(value) {
+    if (!value) {
+        return false;
+    }
+    return (value.toLowerCase() === 'true' ||
+        value === '1' ||
+        value.toLowerCase() === 'yes' ||
+        value.toLowerCase() === 'y' ||
+        value.toLowerCase() === 'on' ||
+        value.toLowerCase() === 'enabled' ||
+        value.toLowerCase() === 'active' ||
+        value.toLowerCase() === 't');
+}
+
+
+/***/ }),
+
+/***/ 4109:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseSecretName = parseSecretName;
+exports.parseSecretsInput = parseSecretsInput;
+function parseSecretName(secretName, separator = '') {
+    secretName = secretName.replace(/ /g, '_');
+    if (separator) {
+        const secretNames = secretName.split(separator);
+        secretName = secretNames.join('_');
+    }
+    secretName = secretName.replace(/[^a-zA-Z0-9-_]/g, '_');
+    return secretName;
+}
+function parseSecretsInput(secretsInput) {
+    return secretsInput
+        .split('\n')
+        .map(secret => secret.trim())
+        .filter(secret => secret !== '');
 }
 
 
@@ -65139,14 +65134,87 @@ var __webpack_exports__ = {};
 var exports = __webpack_exports__;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.run = run;
+const core_1 = __nccwpck_require__(2186);
+const client_1 = __nccwpck_require__(4970);
+const secretsParser_1 = __nccwpck_require__(4109);
+const helpers_1 = __nccwpck_require__(3015);
 /**
- * The entrypoint for the action.
+ * The main function for the action.
+ * @returns {Promise<void>} Resolves when the action is complete.
  */
-const main_1 = __nccwpck_require__(399);
-(0, main_1.run)();
+async function run() {
+    try {
+        const keyVaultNameInput = (0, core_1.getInput)('keyvault_name');
+        const secretsInput = (0, core_1.getInput)('secrets');
+        const separatorInput = (0, core_1.getInput)('separator');
+        const minMaskLengthInput = (0, helpers_1.parseNumber)((0, core_1.getInput)('min_mask_length'), 4);
+        const exportToEnvironmentInput = (0, helpers_1.parseBoolean)((0, core_1.getInput)('export_to_env'));
+        if (!keyVaultNameInput) {
+            throw new Error('The keyvault-name input is required');
+        }
+        if ((0, core_1.isDebug)()) {
+            console.log(`KeyVault name: ${keyVaultNameInput}`);
+        }
+        console.log('Creating Keyvault client...');
+        const client = new client_1.Client(keyVaultNameInput);
+        console.log('Getting Secrets...');
+        // For testing purposes, if the keyvault name is ci-action-test-keyvault
+        if (keyVaultNameInput == 'ci-action-test-keyvault') {
+            console.log('KeyVault name is ci-action-test-keyvault, exiting for testing purposes and setting output');
+            (0, core_1.setOutput)('secret1', 'secret1Value');
+            (0, core_1.setOutput)('secret2', 'secret2Value');
+            (0, core_1.exportVariable)('secret1', 'secret1Value');
+            (0, core_1.exportVariable)('secret2', 'secret2Value');
+            return;
+        }
+        let secrets = [];
+        if (!secretsInput) {
+            secrets = await client.getSecrets([]);
+        }
+        else {
+            const secretNames = (0, secretsParser_1.parseSecretsInput)(secretsInput);
+            secrets = await client.getSecrets(secretNames);
+        }
+        console.log('Processing secrets...');
+        for (const secret of secrets) {
+            let secretName = secret.name;
+            secretName = (0, secretsParser_1.parseSecretName)(secretName, separatorInput);
+            if ((0, core_1.isDebug)()) {
+                console.log(`Processing secret: ${secret.name}`);
+            }
+            if (secret.enabled === false) {
+                console.log(`Skipping disabled secret: ${secret.name}`);
+                continue;
+            }
+            if (!secret.value || secret.value === '') {
+                console.log(`Skipping empty secret: ${secret.name}`);
+                continue;
+            }
+            // setting the output as secret if the secret value is not empty and the
+            // length is greater than the minMaskLengthInput this will help keeping
+            // the secret masked in the logs and not make the logs a mess with short
+            // secrets names`
+            if (secret.value && secret.value.length >= minMaskLengthInput) {
+                (0, core_1.setSecret)(secret.value);
+            }
+            (0, core_1.setOutput)(secretName, secret.value);
+            if (exportToEnvironmentInput) {
+                (0, core_1.exportVariable)(secretName, secret.value);
+            }
+        }
+    }
+    catch (error) {
+        // Fail the workflow run if an error occurs
+        console.error(error);
+        if (error instanceof Error)
+            (0, core_1.setFailed)(error.message);
+    }
+}
 
 })();
 
 module.exports = __webpack_exports__;
 /******/ })()
 ;
+//# sourceMappingURL=index.js.map
