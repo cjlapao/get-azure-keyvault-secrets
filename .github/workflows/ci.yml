@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   test-javascript:
@@ -42,6 +43,32 @@ jobs:
         id: npm-ci-test
         run: npm run ci-test
 
+      - name: Code Coverage Summary Report
+        if:
+          github.event_name == 'pull_request' && !startsWith(github.actor,
+          'dependabot')
+        uses: irongut/CodeCoverageSummary@v1.3.0
+        with:
+          filename: coverage/cobertura-coverage.xml
+          badge: true
+          fail_below_min: true
+          format: markdown
+          hide_branch_rate: false
+          hide_complexity: false
+          indicators: true
+          output: both
+          thresholds: '50 80'
+
+      - name: Add Coverage PR Comment
+        if:
+          github.event_name == 'pull_request' && !startsWith(github.actor,
+          'dependabot')
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          recreate: true
+          path: code-coverage-results.md
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+
   test-action:
     name: GitHub Actions Test
     runs-on: ubuntu-latest
@@ -51,13 +78,14 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
-      # - name: Test Local Action
-      #   id: test-action
-      #   uses: ./
-      #   with:
-      #     badge-path: ./test-badge.svg
-      #     title: stable
-
-      # - name: Print Output
-      #   id: output
-      #   run: echo "${{ steps.test-action.outputs.badge-path }}"
+      - name: Test Local Action
+        id: test-action
+        uses: ./
+        with:
+          tenant_id: 'test-tenant-id'
+          client_id: 'test-client-id'
+          client_secret: 'test-secret'
+          keyvault_name: 'ci-action-test-keyvault'
+          secrets: |
+            secret1
+            secret2
