@@ -51,7 +51,7 @@ jobs:
           filename: coverage/coverage-summary.json
           badge: true
           fail_below_min: true
-          format: markdown
+          format: text
           hide_branch_rate: false
           hide_complexity: false
           indicators: true
