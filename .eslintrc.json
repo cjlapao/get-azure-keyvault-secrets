@@ -12,8 +12,7 @@
   },
   "parserOptions": {
     "ecmaVersion": 2018,
-    "project": "./tsconfig.eslint.json",
-    "tsconfigRootDir": "./src"
+    "project": "./tsconfig.eslint.json"
   },
   "rules": {},
   "ignorePatterns": [

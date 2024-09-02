@@ -40091,6 +40091,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Client = void 0;
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 const core = __importStar(__nccwpck_require__(2186));
 const identity_1 = __nccwpck_require__(3084);
 const keyvault_secrets_1 = __nccwpck_require__(181);
@@ -40099,23 +40100,25 @@ class Client {
     constructor(keyVaultName, credentials = undefined) {
         const url = `https://${keyVaultName}.vault.azure.net`;
         let clientCredentials;
-        if (!credentials) {
+        if (credentials == null) {
             clientCredentials = this.getCredentials();
         }
-        else if (credentials?.userDefaultCredentials) {
+        else if (credentials?.userDefaultCredentials !== undefined &&
+            credentials?.userDefaultCredentials) {
             clientCredentials = this.getDefaultCredentials();
         }
         else {
-            if (!credentials?.tenantId) {
+            if (credentials?.tenantId === undefined || credentials?.tenantId === '') {
                 throw new Error('The tenant_id input is required');
             }
-            if (!credentials?.clientId) {
+            if (credentials?.clientId === undefined || credentials?.clientId === '') {
                 throw new Error('The client_id input is required');
             }
-            if (!credentials?.clientSecret) {
+            if (credentials?.clientSecret === undefined ||
+                credentials?.clientSecret === '') {
                 throw new Error('The client_secret input is required');
             }
-            clientCredentials = new identity_1.ClientSecretCredential(credentials.tenantId, credentials.clientId, credentials.clientSecret);
+            clientCredentials = new identity_1.ClientSecretCredential(credentials.tenantId ?? '', credentials.clientId, credentials.clientSecret);
         }
         this._client = new keyvault_secrets_1.SecretClient(url, clientCredentials);
     }
@@ -40123,13 +40126,13 @@ class Client {
         const tenantId = core.getInput('tenant_id');
         const clientId = core.getInput('client_id');
         const clientSecret = core.getInput('client_secret');
-        if (!tenantId) {
+        if (tenantId === '') {
             throw new Error('The tenant_id input is required');
         }
-        if (!clientId) {
+        if (clientId === '') {
             throw new Error('The client_id input is required');
         }
-        if (!clientSecret) {
+        if (clientSecret === '') {
             throw new Error('The client_secret input is required');
         }
         const credentials = new identity_1.ClientSecretCredential(tenantId, clientId, clientSecret);
@@ -40204,11 +40207,12 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.isDebug = isDebug;
 exports.parseNumber = parseNumber;
 exports.parseBoolean = parseBoolean;
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 function isDebug() {
-    return process.env['RUNNER_DEBUG'] === '1';
+    return process.env.RUNNER_DEBUG === '1';
 }
 function parseNumber(value, defaultValue) {
-    if (!value) {
+    if (value === undefined || value === null) {
         return defaultValue;
     }
     const int = parseInt(value, 10);
@@ -40218,7 +40222,7 @@ function parseNumber(value, defaultValue) {
     return int;
 }
 function parseBoolean(value) {
-    if (!value) {
+    if (value === undefined || value === null) {
         return false;
     }
     return (value.toLowerCase() === 'true' ||
@@ -40242,9 +40246,10 @@ function parseBoolean(value) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseSecretName = parseSecretName;
 exports.parseSecretsInput = parseSecretsInput;
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 function parseSecretName(secretName, separator = '') {
     secretName = secretName.replace(/ /g, '_');
-    if (separator) {
+    if (separator !== '') {
         const secretNames = secretName.split(separator);
         secretName = secretNames.join('_');
     }
@@ -65150,7 +65155,7 @@ async function run() {
         const separatorInput = (0, core_1.getInput)('separator');
         const minMaskLengthInput = (0, helpers_1.parseNumber)((0, core_1.getInput)('min_mask_length'), 4);
         const exportToEnvironmentInput = (0, helpers_1.parseBoolean)((0, core_1.getInput)('export_to_env'));
-        if (!keyVaultNameInput) {
+        if (keyVaultNameInput === '') {
             throw new Error('The keyvault-name input is required');
         }
         if ((0, core_1.isDebug)()) {
@@ -65160,7 +65165,7 @@ async function run() {
         const client = new client_1.Client(keyVaultNameInput);
         console.log('Getting Secrets...');
         // For testing purposes, if the keyvault name is ci-action-test-keyvault
-        if (keyVaultNameInput == 'ci-action-test-keyvault') {
+        if (keyVaultNameInput === 'ci-action-test-keyvault') {
             console.log('KeyVault name is ci-action-test-keyvault, exiting for testing purposes and setting output');
             (0, core_1.setOutput)('secret1', 'secret1Value');
             (0, core_1.setOutput)('secret2', 'secret2Value');
@@ -65169,7 +65174,7 @@ async function run() {
             return;
         }
         let secrets = [];
-        if (!secretsInput) {
+        if (secretsInput === '') {
             secrets = await client.getSecrets([]);
         }
         else {
@@ -65187,7 +65192,7 @@ async function run() {
                 console.log(`Skipping disabled secret: ${secret.name}`);
                 continue;
             }
-            if (!secret.value || secret.value === '') {
+            if (secret.value === undefined || secret.value === '') {
                 console.log(`Skipping empty secret: ${secret.name}`);
                 continue;
             }
@@ -65195,7 +65200,7 @@ async function run() {
             // length is greater than the minMaskLengthInput this will help keeping
             // the secret masked in the logs and not make the logs a mess with short
             // secrets names`
-            if (secret.value && secret.value.length >= minMaskLengthInput) {
+            if (secret.value !== '' && secret.value.length >= minMaskLengthInput) {
                 (0, core_1.setSecret)(secret.value);
             }
             (0, core_1.setOutput)(secretName, secret.value);
