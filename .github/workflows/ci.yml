@@ -52,7 +52,7 @@ jobs:
           filename: coverage/cobertura-coverage.xml
           badge: true
           fail_below_min: true
-          format: text
+          format: markdown
           hide_branch_rate: false
           hide_complexity: false
           indicators: true
@@ -68,7 +68,7 @@ jobs:
           recreate: true
           hide: true
           hide_classify: true
-          message: test
+          path: code-coverage-results.md
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
   test-action:
