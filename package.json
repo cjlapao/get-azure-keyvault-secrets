@@ -67,7 +67,6 @@
       "json-summary",
       "text",
       "lcov",
-      "markdown",
       "cobertura"
     ],
     "collectCoverage": true,
