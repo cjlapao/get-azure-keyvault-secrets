@@ -1,23 +1,23 @@
-name: 'get-azure-keyvault-secrets'
+name: "get-azure-keyvault-secrets"
 description:
-  'Get Azure KeyVault Secrets and either inject them as Environment variables or
-  as outputs for your github actions'
+  "Get Azure KeyVault Secrets and either inject them as Environment variables or
+  as outputs for your github actions"
 branding:
-  icon: 'lock'
-  color: 'blue'
-author: 'Carlos Lapao'
+  icon: "lock"
+  color: "blue"
+author: "Carlos Lapao"
 inputs:
   keyvault_name:
-    description: 'The name of the Azure KeyVault'
+    description: "The name of the Azure KeyVault"
     required: true
   client_id:
-    description: 'The Client ID of the Azure KeyVault'
+    description: "The Client ID of the Azure KeyVault"
     required: true
   client_secret:
-    description: 'The Client Secret of the Azure KeyVault'
+    description: "The Client Secret of the Azure KeyVault"
     required: true
   tenant_id:
-    description: 'The Tenant ID of the Azure KeyVault'
+    description: "The Tenant ID of the Azure KeyVault"
     required: true
   separator:
     description: |-
@@ -31,7 +31,7 @@ inputs:
       This will export the secrets as environment variables besides the default
       behavior of exporting them as output from the step
     required: false
-    default: 'false'
+    default: "false"
   secrets:
     description: |-
       The list of secrets to access and inject into the
@@ -55,7 +55,7 @@ inputs:
       especially important for multi-line secrets, since each line of the secret
       is masked independently.
     required: false
-    default: '4'
+    default: "4"
 outputs:
   secrets:
     description: |-
@@ -78,11 +78,13 @@ outputs:
                   secret1
                   secret2
       ```
+
       it will be available as:
+        
       ```text
       steps.get-secrets.outputs.secret1
       steps.get-secrets.outputs.secret2
       ```
 runs:
-  using: 'node20'
-  main: 'dist/index.js'
+  using: "node20"
+  main: "dist/index.js"

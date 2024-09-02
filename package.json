@@ -66,7 +66,8 @@
     "coverageReporters": [
       "json-summary",
       "text",
-      "lcov"
+      "lcov",
+      "cobertura"
     ],
     "collectCoverage": true,
     "collectCoverageFrom": [
