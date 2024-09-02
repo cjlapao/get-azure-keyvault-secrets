@@ -67,7 +67,7 @@ jobs:
         with:
           recreate: true
           hide: true
-          hide_classify: true
+          hide_classify: OUTDATED
           path: code-coverage-results.md
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
