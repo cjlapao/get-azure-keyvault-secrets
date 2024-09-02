@@ -65,7 +65,7 @@ jobs:
           'dependabot')
         uses: marocchino/sticky-pull-request-comment@v2
         with:
-          delete: true
+          recreate: true
           path: code-coverage-results.md
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
