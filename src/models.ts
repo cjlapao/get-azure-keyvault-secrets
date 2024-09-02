@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 export interface AzureCredentials {
   tenantId?: string
   clientId?: string

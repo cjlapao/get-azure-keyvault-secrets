@@ -1,11 +1,12 @@
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 import * as core from '@actions/core'
 
 import { ClientSecretCredential, DefaultAzureCredential } from '@azure/identity'
-import { SecretClient, SecretProperties } from '@azure/keyvault-secrets'
+import { SecretClient } from '@azure/keyvault-secrets'
 import { AzureCredentials, Secret } from './models'
 
 export class Client {
-  private _client: SecretClient
+  private readonly _client: SecretClient
 
   constructor(
     keyVaultName: string,
@@ -13,22 +14,28 @@ export class Client {
   ) {
     const url = `https://${keyVaultName}.vault.azure.net`
     let clientCredentials: ClientSecretCredential | DefaultAzureCredential
-    if (!credentials) {
+    if (credentials == null) {
       clientCredentials = this.getCredentials()
-    } else if (credentials?.userDefaultCredentials) {
+    } else if (
+      credentials?.userDefaultCredentials !== undefined &&
+      credentials?.userDefaultCredentials
+    ) {
       clientCredentials = this.getDefaultCredentials()
     } else {
-      if (!credentials?.tenantId) {
+      if (credentials?.tenantId === undefined || credentials?.tenantId === '') {
         throw new Error('The tenant_id input is required')
       }
-      if (!credentials?.clientId) {
+      if (credentials?.clientId === undefined || credentials?.clientId === '') {
         throw new Error('The client_id input is required')
       }
-      if (!credentials?.clientSecret) {
+      if (
+        credentials?.clientSecret === undefined ||
+        credentials?.clientSecret === ''
+      ) {
         throw new Error('The client_secret input is required')
       }
       clientCredentials = new ClientSecretCredential(
-        credentials.tenantId,
+        credentials.tenantId ?? '',
         credentials.clientId,
         credentials.clientSecret
       )
@@ -41,13 +48,13 @@ export class Client {
     const tenantId = core.getInput('tenant_id')
     const clientId = core.getInput('client_id')
     const clientSecret = core.getInput('client_secret')
-    if (!tenantId) {
+    if (tenantId === '') {
       throw new Error('The tenant_id input is required')
     }
-    if (!clientId) {
+    if (clientId === '') {
       throw new Error('The client_id input is required')
     }
-    if (!clientSecret) {
+    if (clientSecret === '') {
       throw new Error('The client_secret input is required')
     }
     const credentials = new ClientSecretCredential(

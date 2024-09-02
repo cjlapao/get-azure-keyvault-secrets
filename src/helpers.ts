@@ -1,9 +1,10 @@
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 export function isDebug(): boolean {
-  return process.env['RUNNER_DEBUG'] === '1'
+  return process.env.RUNNER_DEBUG === '1'
 }
 
 export function parseNumber(value: string, defaultValue: number): number {
-  if (!value) {
+  if (value === undefined || value === null) {
     return defaultValue
   }
 
@@ -15,7 +16,7 @@ export function parseNumber(value: string, defaultValue: number): number {
 }
 
 export function parseBoolean(value: string): boolean {
-  if (!value) {
+  if (value === undefined || value === null) {
     return false
   }
 

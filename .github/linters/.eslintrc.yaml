@@ -16,6 +16,7 @@ ignorePatterns:
   - '**/__tests__/.*'
   - '*.json'
   - '/__tests__/.*'
+  - '__tests__/*'
 
 parser: '@typescript-eslint/parser'
 

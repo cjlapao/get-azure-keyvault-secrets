@@ -11,7 +11,18 @@
     "SharedArrayBuffer": "readonly"
   },
   "parserOptions": {
-    "ecmaVersion": 2018
+    "ecmaVersion": 2018,
+    "project": "./tsconfig.eslint.json",
+    "tsconfigRootDir": "./src"
   },
-  "rules": {}
+  "rules": {},
+  "ignorePatterns": [
+    "dist/",
+    "node_modules/",
+    "__tests__",
+    "coverage/",
+    ".vscode/",
+    ".git/",
+    ".github/"
+  ]
 }

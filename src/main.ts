@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 import { Secret } from './models'
 import {
   exportVariable,
@@ -23,7 +24,7 @@ export async function run(): Promise<void> {
     const minMaskLengthInput = parseNumber(getInput('min_mask_length'), 4)
     const exportToEnvironmentInput = parseBoolean(getInput('export_to_env'))
 
-    if (!keyVaultNameInput) {
+    if (keyVaultNameInput === '') {
       throw new Error('The keyvault-name input is required')
     }
     if (isDebug()) {
@@ -35,7 +36,7 @@ export async function run(): Promise<void> {
     console.log('Getting Secrets...')
 
     // For testing purposes, if the keyvault name is ci-action-test-keyvault
-    if (keyVaultNameInput == 'ci-action-test-keyvault') {
+    if (keyVaultNameInput === 'ci-action-test-keyvault') {
       console.log(
         'KeyVault name is ci-action-test-keyvault, exiting for testing purposes and setting output'
       )
@@ -47,7 +48,7 @@ export async function run(): Promise<void> {
     }
 
     let secrets: Secret[] = []
-    if (!secretsInput) {
+    if (secretsInput === '') {
       secrets = await client.getSecrets([])
     } else {
       const secretNames = parseSecretsInput(secretsInput)
@@ -65,7 +66,7 @@ export async function run(): Promise<void> {
         console.log(`Skipping disabled secret: ${secret.name}`)
         continue
       }
-      if (!secret.value || secret.value === '') {
+      if (secret.value === undefined || secret.value === '') {
         console.log(`Skipping empty secret: ${secret.name}`)
         continue
       }
@@ -74,7 +75,7 @@ export async function run(): Promise<void> {
       // length is greater than the minMaskLengthInput this will help keeping
       // the secret masked in the logs and not make the logs a mess with short
       // secrets names`
-      if (secret.value && secret.value.length >= minMaskLengthInput) {
+      if (secret.value !== '' && secret.value.length >= minMaskLengthInput) {
         setSecret(secret.value)
       }
 

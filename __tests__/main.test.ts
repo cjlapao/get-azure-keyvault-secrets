@@ -1,5 +1,6 @@
 /*eslint-disable @typescript-eslint/no-var-requires */
 /*eslint-disable @typescript-eslint/no-unused-vars */
+/*eslint-disable no-unused-vars */
 
 import { Client } from './../src/client'
 import { run } from '../src/main'

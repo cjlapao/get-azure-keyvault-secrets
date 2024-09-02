@@ -1,9 +1,10 @@
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 export function parseSecretName(
   secretName: string,
   separator: string = ''
 ): string {
   secretName = secretName.replace(/ /g, '_')
-  if (separator) {
+  if (separator !== '') {
     const secretNames = secretName.split(separator)
     secretName = secretNames.join('_')
   }
