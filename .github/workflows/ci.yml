@@ -66,8 +66,7 @@ jobs:
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           recreate: true
-          hide: true
-          hide_classify: OUTDATED
+          delete: true
           path: code-coverage-results.md
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
