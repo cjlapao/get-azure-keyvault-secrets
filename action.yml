@@ -1,23 +1,23 @@
-name: "get-azure-keyvault-secrets"
+name: 'get-azure-keyvault-secrets'
 description:
-  "Get Azure KeyVault Secrets and either inject them as Environment variables or
-  as outputs for your github actions"
+  'Get Azure KeyVault Secrets and either inject them as Environment variables or
+  as outputs for your github actions'
 branding:
-  icon: "lock"
-  color: "blue"
-author: "Carlos Lapao"
+  icon: 'lock'
+  color: 'blue'
+author: 'Carlos Lapao'
 inputs:
   keyvault_name:
-    description: "The name of the Azure KeyVault"
+    description: 'The name of the Azure KeyVault'
     required: true
   client_id:
-    description: "The Client ID of the Azure KeyVault"
+    description: 'The Client ID of the Azure KeyVault'
     required: true
   client_secret:
-    description: "The Client Secret of the Azure KeyVault"
+    description: 'The Client Secret of the Azure KeyVault'
     required: true
   tenant_id:
-    description: "The Tenant ID of the Azure KeyVault"
+    description: 'The Tenant ID of the Azure KeyVault'
     required: true
   separator:
     description: |-
@@ -31,7 +31,7 @@ inputs:
       This will export the secrets as environment variables besides the default
       behavior of exporting them as output from the step
     required: false
-    default: "false"
+    default: 'false'
   secrets:
     description: |-
       The list of secrets to access and inject into the
@@ -55,13 +55,39 @@ inputs:
       especially important for multi-line secrets, since each line of the secret
       is masked independently.
     required: false
-    default: "4"
+    default: '4'
 outputs:
   secrets:
     description: |-
       The secrets fetched from the Azure KeyVault. The secrets are returned as
       outputs from the step and can be used in subsequent steps.
+      Note that the output name of the secret can differ from the name in the
+      KeyVault if the `separator` input is used or if the secret name contains
+      characters that are not allowed in output names.
+
+      for example:
+      ```yaml
+      steps:
+        - id: get-secrets
+          uses: carloslapao/get-azure-keyvault-secrets@v1
+          with:
+            keyvault_name: 'my-keyvault'
+            client_id: ${{ secrets.AZURE_CLIENT_ID }}
+            client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+            tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+            separator: "::"
+            secrets: |
+              secret::1
+              secret::2
+              $ecret::3
+      ```
+      The secrets will be available as:
+      ```text
+      ${{ steps.get-secrets.outputs.secret__1 }}
+      ${{ steps.get-secrets.outputs.secret__2 }}
+      ${{ steps.get-secrets.outputs._ecret__3 }}
+      ```
 
 runs:
-  using: "node20"
-  main: "dist/index.js"
+  using: 'node20'
+  main: 'dist/index.js'

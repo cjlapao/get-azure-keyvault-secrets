@@ -40247,14 +40247,15 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseSecretName = parseSecretName;
 exports.parseSecretsInput = parseSecretsInput;
 /* eslint-disable @typescript-eslint/space-before-function-paren */
-const separator = '__';
+const spaceOrSpecialReplaceChar = '_';
+const separatorReplaceChar = '__';
 function parseSecretName(secretName, separator = '') {
-    secretName = secretName.replace(/ /g, separator);
+    secretName = secretName.replace(/ /g, spaceOrSpecialReplaceChar);
     if (separator !== '') {
         const secretNames = secretName.split(separator);
-        secretName = secretNames.join('_');
+        secretName = secretNames.join(separatorReplaceChar);
     }
-    secretName = secretName.replace(/[^a-zA-Z0-9-_]/g, separator);
+    secretName = secretName.replace(/[^a-zA-Z0-9-_]/g, spaceOrSpecialReplaceChar);
     return secretName;
 }
 function parseSecretsInput(secretsInput) {
