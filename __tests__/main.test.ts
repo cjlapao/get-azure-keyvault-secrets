@@ -167,7 +167,7 @@ describe('run', () => {
 
     await run()
     expect(setOutputMock).toHaveBeenCalledWith(
-      'my_secret_value',
+      'secrets.my_secret_value',
       'my|secret|value'
     )
     expect(exportVariableMock).toHaveBeenCalledWith(
@@ -195,7 +195,10 @@ describe('run', () => {
       )
 
     await run()
-    expect(setOutputMock).toHaveBeenCalledWith('secret1', 'my|secret|value')
+    expect(setOutputMock).toHaveBeenCalledWith(
+      'secrets.secret1',
+      'my|secret|value'
+    )
     expect(exportVariableMock).not.toHaveBeenCalled()
   })
 

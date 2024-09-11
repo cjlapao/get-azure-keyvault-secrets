@@ -65212,7 +65212,7 @@ async function run() {
             if ((0, core_1.isDebug)()) {
                 console.log(`Setting secret output: ${secretName}`);
             }
-            (0, core_1.setOutput)(secretName, secret.value);
+            (0, core_1.setOutput)(`secrets.${secretName}`, secret.value);
             if (exportToEnvironmentInput) {
                 if ((0, core_1.isDebug)()) {
                     console.log(`Exporting secret to environment: ${secretName}`);
