@@ -60,7 +60,7 @@ export async function run(): Promise<void> {
     }
 
     console.log(
-      `Processing ${secrets.length} secret ${secrets.length > 0 ? 's' : ''}...`
+      `Processing ${secrets.length} secret${secrets.length > 0 ? 's' : ''}...`
     )
     for (const secret of secrets) {
       let secretName = secret.name

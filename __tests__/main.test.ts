@@ -140,7 +140,7 @@ describe('run', () => {
     expect(setOutputMock).toHaveBeenCalledTimes(1)
     expect(exportVariableMock).toHaveBeenCalledTimes(0)
     expect(setSecretMock).toHaveBeenCalledTimes(1)
-    expect(console.log).toHaveBeenCalledWith('Processing secrets...')
+    expect(console.log).toHaveBeenCalledWith('Processing 3 secrets...')
     expect(console.log).toHaveBeenCalledWith(
       'Skipping disabled secret: secret2'
     )
