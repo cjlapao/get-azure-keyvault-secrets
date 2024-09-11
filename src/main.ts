@@ -91,3 +91,7 @@ export async function run(): Promise<void> {
     if (error instanceof Error) setFailed(error.message)
   }
 }
+
+if (require.main === module) {
+  run();
+}
