@@ -65,29 +65,6 @@ outputs:
       KeyVault if the `separator` input is used or if the secret name contains
       characters that are not allowed in output names.
 
-      for example:
-      ```yaml
-      steps:
-        - id: get-secrets
-          uses: carloslapao/get-azure-keyvault-secrets@v1
-          with:
-            keyvault_name: 'my-keyvault'
-            client_id: ${{ secrets.AZURE_CLIENT_ID }}
-            client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-            tenant_id: ${{ secrets.AZURE_TENANT_ID }}
-            separator: "::"
-            secrets: |
-              secret::1
-              secret::2
-              $ecret::3
-      ```
-      The secrets will be available as:
-      ```text
-      ${{ steps.get-secrets.outputs.secret__1 }}
-      ${{ steps.get-secrets.outputs.secret__2 }}
-      ${{ steps.get-secrets.outputs._ecret__3 }}
-      ```
-
 runs:
   using: 'node20'
   main: 'dist/index.js'
