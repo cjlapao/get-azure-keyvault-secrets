@@ -1,4 +1,4 @@
-require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
+/******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
 /***/ 7351:
@@ -65181,7 +65181,11 @@ async function run() {
             const secretNames = (0, secretsParser_1.parseSecretsInput)(secretsInput);
             secrets = await client.getSecrets(secretNames);
         }
-        console.log('Processing secrets...');
+        if (secrets.length === 0) {
+            console.log('No secrets found');
+            return;
+        }
+        console.log(`Processing ${secrets.length} secret ${secrets.length > 0 ? 's' : ''}...`);
         for (const secret of secrets) {
             let secretName = secret.name;
             secretName = (0, secretsParser_1.parseSecretName)(secretName, separatorInput);
@@ -65203,11 +65207,19 @@ async function run() {
             if (secret.value !== '' && secret.value.length >= minMaskLengthInput) {
                 (0, core_1.setSecret)(secret.value);
             }
+            if ((0, core_1.isDebug)()) {
+                console.log(`Setting secret output: ${secretName}`);
+            }
             (0, core_1.setOutput)(secretName, secret.value);
             if (exportToEnvironmentInput) {
+                if ((0, core_1.isDebug)()) {
+                    console.log(`Exporting secret to environment: ${secretName}`);
+                }
                 (0, core_1.exportVariable)(secretName, secret.value);
             }
+            console.log(`Secret ${secretName} processed`);
         }
+        console.log(`${secrets.length} secret${secrets.length > 0 ? 's' : ''} processed`);
     }
     catch (error) {
         // Fail the workflow run if an error occurs
@@ -65225,4 +65237,3 @@ if (require.main === require.cache[eval('__filename')]) {
 module.exports = __webpack_exports__;
 /******/ })()
 ;
-//# sourceMappingURL=index.js.map
