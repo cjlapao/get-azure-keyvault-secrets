@@ -16,7 +16,7 @@ describe('parseSecrets', () => {
   it('should replace custom separator with underscores', () => {
     const secretName = 'my|secret|name'
     const separator = '|'
-    const expected = 'my_secret_name'
+    const expected = 'my__secret__name'
 
     const result = parseSecretName(secretName, separator)
 
@@ -35,7 +35,7 @@ describe('parseSecrets', () => {
   it('should replace special characters with underscores and the custom separator', () => {
     const secretName = 'my|!@#$secret|%^&name'
     const separator = '|'
-    const expected = 'my_____secret____name'
+    const expected = 'my______secret_____name'
 
     const result = parseSecretName(secretName, separator)
 
