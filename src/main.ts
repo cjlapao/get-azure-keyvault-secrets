@@ -89,7 +89,7 @@ export async function run(): Promise<void> {
       if (isDebug()) {
         console.log(`Setting secret output: ${secretName}`)
       }
-      setOutput(secretName, secret.value)
+      setOutput(`secrets.${secretName}`, secret.value)
 
       if (exportToEnvironmentInput) {
         if (isDebug()) {
