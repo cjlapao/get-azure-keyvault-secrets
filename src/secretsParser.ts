@@ -1,15 +1,17 @@
 /* eslint-disable @typescript-eslint/space-before-function-paren */
+const spaceOrSpecialReplaceChar = '_'
+const separatorReplaceChar = '__'
 export function parseSecretName(
   secretName: string,
   separator: string = ''
 ): string {
-  secretName = secretName.replace(/ /g, '_')
+  secretName = secretName.replace(/ /g, spaceOrSpecialReplaceChar)
   if (separator !== '') {
     const secretNames = secretName.split(separator)
-    secretName = secretNames.join('_')
+    secretName = secretNames.join(separatorReplaceChar)
   }
 
-  secretName = secretName.replace(/[^a-zA-Z0-9-_]/g, '_')
+  secretName = secretName.replace(/[^a-zA-Z0-9-_]/g, spaceOrSpecialReplaceChar)
   return secretName
 }
 

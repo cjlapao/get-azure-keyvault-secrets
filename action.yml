@@ -56,6 +56,15 @@ inputs:
       is masked independently.
     required: false
     default: '4'
+outputs:
+  secrets:
+    description: |-
+      The secrets fetched from the Azure KeyVault. The secrets are returned as
+      outputs from the step and can be used in subsequent steps.
+      Note that the output name of the secret can differ from the name in the
+      KeyVault if the `separator` input is used or if the secret name contains
+      characters that are not allowed in output names.
+
 runs:
   using: 'node20'
   main: 'dist/index.js'
