@@ -54,7 +54,14 @@ export async function run(): Promise<void> {
       const secretNames = parseSecretsInput(secretsInput)
       secrets = await client.getSecrets(secretNames)
     }
-    console.log('Processing secrets...')
+    if (secrets.length === 0) {
+      console.log('No secrets found')
+      return
+    }
+
+    console.log(
+      `Processing ${secrets.length} secret${secrets.length > 0 ? 's' : ''}...`
+    )
     for (const secret of secrets) {
       let secretName = secret.name
       secretName = parseSecretName(secretName, separatorInput)
@@ -79,12 +86,24 @@ export async function run(): Promise<void> {
         setSecret(secret.value)
       }
 
+      if (isDebug()) {
+        console.log(`Setting secret output: ${secretName}`)
+      }
       setOutput(secretName, secret.value)
 
       if (exportToEnvironmentInput) {
+        if (isDebug()) {
+          console.log(`Exporting secret to environment: ${secretName}`)
+        }
+
         exportVariable(secretName, secret.value)
       }
+
+      console.log(`Secret ${secretName} processed`)
     }
+    console.log(
+      `${secrets.length} secret${secrets.length > 0 ? 's' : ''} processed`
+    )
   } catch (error) {
     // Fail the workflow run if an error occurs
     console.error(error)
