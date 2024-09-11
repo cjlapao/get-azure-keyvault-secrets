@@ -65185,7 +65185,7 @@ async function run() {
             console.log('No secrets found');
             return;
         }
-        console.log(`Processing ${secrets.length} secret ${secrets.length > 0 ? 's' : ''}...`);
+        console.log(`Processing ${secrets.length} secret${secrets.length > 0 ? 's' : ''}...`);
         for (const secret of secrets) {
             let secretName = secret.name;
             secretName = (0, secretsParser_1.parseSecretName)(secretName, separatorInput);
