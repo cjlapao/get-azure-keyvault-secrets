@@ -65216,6 +65216,9 @@ async function run() {
             (0, core_1.setFailed)(error.message);
     }
 }
+if (require.main === require.cache[eval('__filename')]) {
+    run();
+}
 
 })();
 
