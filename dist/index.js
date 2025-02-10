@@ -2505,7 +2505,7 @@ class HttpClient {
         }
         const usingSsl = parsedUrl.protocol === 'https:';
         proxyAgent = new undici_1.ProxyAgent(Object.assign({ uri: proxyUrl.href, pipelining: !this._keepAlive ? 0 : 1 }, ((proxyUrl.username || proxyUrl.password) && {
-            token: `${proxyUrl.username}:${proxyUrl.password}`
+            token: `Basic ${Buffer.from(`${proxyUrl.username}:${proxyUrl.password}`).toString('base64')}`
         })));
         this._proxyAgentDispatcher = proxyAgent;
         if (usingSsl && this._ignoreSslError) {
@@ -2619,11 +2619,11 @@ function getProxyUrl(reqUrl) {
     })();
     if (proxyVar) {
         try {
-            return new URL(proxyVar);
+            return new DecodedURL(proxyVar);
         }
         catch (_a) {
             if (!proxyVar.startsWith('http://') && !proxyVar.startsWith('https://'))
-                return new URL(`http://${proxyVar}`);
+                return new DecodedURL(`http://${proxyVar}`);
         }
     }
     else {
@@ -2681,6 +2681,19 @@ function isLoopbackAddress(host) {
         hostLower.startsWith('127.') ||
         hostLower.startsWith('[::1]') ||
         hostLower.startsWith('[0:0:0:0:0:0:0:1]'));
+}
+class DecodedURL extends URL {
+    constructor(url, base) {
+        super(url, base);
+        this._decodedUsername = decodeURIComponent(super.username);
+        this._decodedPassword = decodeURIComponent(super.password);
+    }
+    get username() {
+        return this._decodedUsername;
+    }
+    get password() {
+        return this._decodedPassword;
+    }
 }
 //# sourceMappingURL=proxy.js.map
 
@@ -7613,8 +7626,13 @@ class Agent extends http.Agent {
             .then((socket) => {
             this.decrementSockets(name, fakeSocket);
             if (socket instanceof http.Agent) {
-                // @ts-expect-error `addRequest()` isn't defined in `@types/node`
-                return socket.addRequest(req, connectOpts);
+                try {
+                    // @ts-expect-error `addRequest()` isn't defined in `@types/node`
+                    return socket.addRequest(req, connectOpts);
+                }
+                catch (err) {
+                    return cb(err);
+                }
             }
             this[INTERNAL].currentSocket = socket;
             // @ts-expect-error `createSocket()` isn't defined in `@types/node`
@@ -7835,14 +7853,17 @@ function useColors() {
 		return false;
 	}
 
+	let m;
+
 	// Is webkit? http://stackoverflow.com/a/16459606/376773
 	// document is undefined in react-native: https://github.com/facebook/react-native/pull/1632
+	// eslint-disable-next-line no-return-assign
 	return (typeof document !== 'undefined' && document.documentElement && document.documentElement.style && document.documentElement.style.WebkitAppearance) ||
 		// Is firebug? http://stackoverflow.com/a/398120/376773
 		(typeof window !== 'undefined' && window.console && (window.console.firebug || (window.console.exception && window.console.table))) ||
 		// Is firefox >= v31?
 		// https://developer.mozilla.org/en-US/docs/Tools/Web_Console#Styling_messages
-		(typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.toLowerCase().match(/firefox\/(\d+)/) && parseInt(RegExp.$1, 10) >= 31) ||
+		(typeof navigator !== 'undefined' && navigator.userAgent && (m = navigator.userAgent.toLowerCase().match(/firefox\/(\d+)/)) && parseInt(m[1], 10) >= 31) ||
 		// Double check webkit in userAgent just in case we are in a worker
 		(typeof navigator !== 'undefined' && navigator.userAgent && navigator.userAgent.toLowerCase().match(/applewebkit\/(\d+)/));
 }
@@ -8152,24 +8173,62 @@ function setup(env) {
 		createDebug.names = [];
 		createDebug.skips = [];
 
-		let i;
-		const split = (typeof namespaces === 'string' ? namespaces : '').split(/[\s,]+/);
-		const len = split.length;
+		const split = (typeof namespaces === 'string' ? namespaces : '')
+			.trim()
+			.replace(' ', ',')
+			.split(',')
+			.filter(Boolean);
 
-		for (i = 0; i < len; i++) {
-			if (!split[i]) {
-				// ignore empty strings
-				continue;
-			}
-
-			namespaces = split[i].replace(/\*/g, '.*?');
-
-			if (namespaces[0] === '-') {
-				createDebug.skips.push(new RegExp('^' + namespaces.slice(1) + '$'));
+		for (const ns of split) {
+			if (ns[0] === '-') {
+				createDebug.skips.push(ns.slice(1));
 			} else {
-				createDebug.names.push(new RegExp('^' + namespaces + '$'));
+				createDebug.names.push(ns);
 			}
 		}
+	}
+
+	/**
+	 * Checks if the given string matches a namespace template, honoring
+	 * asterisks as wildcards.
+	 *
+	 * @param {String} search
+	 * @param {String} template
+	 * @return {Boolean}
+	 */
+	function matchesTemplate(search, template) {
+		let searchIndex = 0;
+		let templateIndex = 0;
+		let starIndex = -1;
+		let matchIndex = 0;
+
+		while (searchIndex < search.length) {
+			if (templateIndex < template.length && (template[templateIndex] === search[searchIndex] || template[templateIndex] === '*')) {
+				// Match character or proceed with wildcard
+				if (template[templateIndex] === '*') {
+					starIndex = templateIndex;
+					matchIndex = searchIndex;
+					templateIndex++; // Skip the '*'
+				} else {
+					searchIndex++;
+					templateIndex++;
+				}
+			} else if (starIndex !== -1) { // eslint-disable-line no-negated-condition
+				// Backtrack to the last '*' and try to match more characters
+				templateIndex = starIndex + 1;
+				matchIndex++;
+				searchIndex = matchIndex;
+			} else {
+				return false; // No match
+			}
+		}
+
+		// Handle trailing '*' in template
+		while (templateIndex < template.length && template[templateIndex] === '*') {
+			templateIndex++;
+		}
+
+		return templateIndex === template.length;
 	}
 
 	/**
@@ -8180,8 +8239,8 @@ function setup(env) {
 	*/
 	function disable() {
 		const namespaces = [
-			...createDebug.names.map(toNamespace),
-			...createDebug.skips.map(toNamespace).map(namespace => '-' + namespace)
+			...createDebug.names,
+			...createDebug.skips.map(namespace => '-' + namespace)
 		].join(',');
 		createDebug.enable('');
 		return namespaces;
@@ -8195,39 +8254,19 @@ function setup(env) {
 	* @api public
 	*/
 	function enabled(name) {
-		if (name[name.length - 1] === '*') {
-			return true;
-		}
-
-		let i;
-		let len;
-
-		for (i = 0, len = createDebug.skips.length; i < len; i++) {
-			if (createDebug.skips[i].test(name)) {
+		for (const skip of createDebug.skips) {
+			if (matchesTemplate(name, skip)) {
 				return false;
 			}
 		}
 
-		for (i = 0, len = createDebug.names.length; i < len; i++) {
-			if (createDebug.names[i].test(name)) {
+		for (const ns of createDebug.names) {
+			if (matchesTemplate(name, ns)) {
 				return true;
 			}
 		}
 
 		return false;
-	}
-
-	/**
-	* Convert regexp to namespace
-	*
-	* @param {RegExp} regxep
-	* @return {String} namespace
-	* @api private
-	*/
-	function toNamespace(regexp) {
-		return regexp.toString()
-			.substring(2, regexp.toString().length - 2)
-			.replace(/\.\*\?$/, '*');
 	}
 
 	/**
@@ -8313,7 +8352,7 @@ exports.colors = [6, 2, 3, 4, 5, 1];
 try {
 	// Optional dependency (as in, doesn't need to be installed, NOT like optionalDependencies in package.json)
 	// eslint-disable-next-line import/no-extraneous-dependencies
-	const supportsColor = __nccwpck_require__(75);
+	const supportsColor = __nccwpck_require__(1450);
 
 	if (supportsColor && (supportsColor.stderr || supportsColor).level >= 2) {
 		exports.colors = [
@@ -8802,6 +8841,22 @@ module.exports = getParamBytesForAlg;
 
 /***/ }),
 
+/***/ 3813:
+/***/ ((module) => {
+
+"use strict";
+
+
+module.exports = (flag, argv = process.argv) => {
+	const prefix = flag.startsWith('-') ? '' : (flag.length === 1 ? '-' : '--');
+	const position = argv.indexOf(prefix + flag);
+	const terminatorPosition = argv.indexOf('--');
+	return position !== -1 && (terminatorPosition === -1 || position < terminatorPosition);
+};
+
+
+/***/ }),
+
 /***/ 1970:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -8998,6 +9053,17 @@ const agent_base_1 = __nccwpck_require__(8894);
 const url_1 = __nccwpck_require__(7016);
 const parse_proxy_response_1 = __nccwpck_require__(7943);
 const debug = (0, debug_1.default)('https-proxy-agent');
+const setServernameFromNonIpHost = (options) => {
+    if (options.servername === undefined &&
+        options.host &&
+        !net.isIP(options.host)) {
+        return {
+            ...options,
+            servername: options.host,
+        };
+    }
+    return options;
+};
 /**
  * The `HttpsProxyAgent` implements an HTTP Agent subclass that connects to
  * the specified "HTTP(s) proxy server" in order to proxy HTTPS requests.
@@ -9045,11 +9111,7 @@ class HttpsProxyAgent extends agent_base_1.Agent {
         let socket;
         if (proxy.protocol === 'https:') {
             debug('Creating `tls.Socket`: %o', this.connectOpts);
-            const servername = this.connectOpts.servername || this.connectOpts.host;
-            socket = tls.connect({
-                ...this.connectOpts,
-                servername,
-            });
+            socket = tls.connect(setServernameFromNonIpHost(this.connectOpts));
         }
         else {
             debug('Creating `net.Socket`: %o', this.connectOpts);
@@ -9085,11 +9147,9 @@ class HttpsProxyAgent extends agent_base_1.Agent {
                 // The proxy is connecting to a TLS server, so upgrade
                 // this socket connection to a TLS connection.
                 debug('Upgrading socket connection to TLS');
-                const servername = opts.servername || opts.host;
                 return tls.connect({
-                    ...omit(opts, 'host', 'path', 'port'),
+                    ...omit(setServernameFromNonIpHost(opts), 'host', 'path', 'port'),
                     socket,
-                    servername,
                 });
             }
             return socket;
@@ -10854,7 +10914,7 @@ const testSet = (set, version, options) => {
 
 const debug = __nccwpck_require__(7384)
 const { MAX_LENGTH, MAX_SAFE_INTEGER } = __nccwpck_require__(5994)
-const { safeRe: re, t } = __nccwpck_require__(5862)
+const { safeRe: re, safeSrc: src, t } = __nccwpck_require__(5862)
 
 const parseOptions = __nccwpck_require__(6555)
 const { compareIdentifiers } = __nccwpck_require__(3523)
@@ -10864,7 +10924,7 @@ class SemVer {
 
     if (version instanceof SemVer) {
       if (version.loose === !!options.loose &&
-          version.includePrerelease === !!options.includePrerelease) {
+        version.includePrerelease === !!options.includePrerelease) {
         return version
       } else {
         version = version.version
@@ -11030,6 +11090,20 @@ class SemVer {
   // preminor will bump the version up to the next minor release, and immediately
   // down to pre-release. premajor and prepatch work the same way.
   inc (release, identifier, identifierBase) {
+    if (release.startsWith('pre')) {
+      if (!identifier && identifierBase === false) {
+        throw new Error('invalid increment argument: identifier is empty')
+      }
+      // Avoid an invalid semver results
+      if (identifier) {
+        const r = new RegExp(`^${this.options.loose ? src[t.PRERELEASELOOSE] : src[t.PRERELEASE]}$`)
+        const match = `-${identifier}`.match(r)
+        if (!match || match[1] !== identifier) {
+          throw new Error(`invalid identifier: ${identifier}`)
+        }
+      }
+    }
+
     switch (release) {
       case 'premajor':
         this.prerelease.length = 0
@@ -11059,6 +11133,12 @@ class SemVer {
           this.inc('patch', identifier, identifierBase)
         }
         this.inc('pre', identifier, identifierBase)
+        break
+      case 'release':
+        if (this.prerelease.length === 0) {
+          throw new Error(`version ${this.raw} is not a prerelease`)
+        }
+        this.prerelease.length = 0
         break
 
       case 'major':
@@ -11102,10 +11182,6 @@ class SemVer {
       // 1.0.0 'pre' would become 1.0.0-0 which is the wrong direction.
       case 'pre': {
         const base = Number(identifierBase) ? 1 : 0
-
-        if (!identifier && identifierBase === false) {
-          throw new Error('invalid increment argument: identifier is empty')
-        }
 
         if (this.prerelease.length === 0) {
           this.prerelease = [base]
@@ -11365,20 +11441,13 @@ const diff = (version1, version2) => {
       return 'major'
     }
 
-    // Otherwise it can be determined by checking the high version
-
-    if (highVersion.patch) {
-      // anything higher than a patch bump would result in the wrong version
+    // If the main part has no difference
+    if (lowVersion.compareMain(highVersion) === 0) {
+      if (lowVersion.minor && !lowVersion.patch) {
+        return 'minor'
+      }
       return 'patch'
     }
-
-    if (highVersion.minor) {
-      // anything higher than a minor bump would result in the wrong version
-      return 'minor'
-    }
-
-    // bumping major/minor/patch all have same result
-    return 'major'
   }
 
   // add the `pre` prefix if we are going to a prerelease version
@@ -11885,6 +11954,7 @@ exports = module.exports = {}
 const re = exports.re = []
 const safeRe = exports.safeRe = []
 const src = exports.src = []
+const safeSrc = exports.safeSrc = []
 const t = exports.t = {}
 let R = 0
 
@@ -11917,6 +11987,7 @@ const createToken = (name, value, isGlobal) => {
   debug(name, index, value)
   t[name] = index
   src[index] = value
+  safeSrc[index] = safe
   re[index] = new RegExp(value, isGlobal ? 'g' : undefined)
   safeRe[index] = new RegExp(safe, isGlobal ? 'g' : undefined)
 }
@@ -14983,7 +15054,7 @@ var y = d * 365.25;
  * @api public
  */
 
-module.exports = function(val, options) {
+module.exports = function (val, options) {
   options = options || {};
   var type = typeof val;
   if (type === 'string' && val.length > 0) {
@@ -15537,6 +15608,149 @@ SafeBuffer.allocUnsafeSlow = function (size) {
 
 /***/ }),
 
+/***/ 1450:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+const os = __nccwpck_require__(857);
+const tty = __nccwpck_require__(2018);
+const hasFlag = __nccwpck_require__(3813);
+
+const {env} = process;
+
+let forceColor;
+if (hasFlag('no-color') ||
+	hasFlag('no-colors') ||
+	hasFlag('color=false') ||
+	hasFlag('color=never')) {
+	forceColor = 0;
+} else if (hasFlag('color') ||
+	hasFlag('colors') ||
+	hasFlag('color=true') ||
+	hasFlag('color=always')) {
+	forceColor = 1;
+}
+
+if ('FORCE_COLOR' in env) {
+	if (env.FORCE_COLOR === 'true') {
+		forceColor = 1;
+	} else if (env.FORCE_COLOR === 'false') {
+		forceColor = 0;
+	} else {
+		forceColor = env.FORCE_COLOR.length === 0 ? 1 : Math.min(parseInt(env.FORCE_COLOR, 10), 3);
+	}
+}
+
+function translateLevel(level) {
+	if (level === 0) {
+		return false;
+	}
+
+	return {
+		level,
+		hasBasic: true,
+		has256: level >= 2,
+		has16m: level >= 3
+	};
+}
+
+function supportsColor(haveStream, streamIsTTY) {
+	if (forceColor === 0) {
+		return 0;
+	}
+
+	if (hasFlag('color=16m') ||
+		hasFlag('color=full') ||
+		hasFlag('color=truecolor')) {
+		return 3;
+	}
+
+	if (hasFlag('color=256')) {
+		return 2;
+	}
+
+	if (haveStream && !streamIsTTY && forceColor === undefined) {
+		return 0;
+	}
+
+	const min = forceColor || 0;
+
+	if (env.TERM === 'dumb') {
+		return min;
+	}
+
+	if (process.platform === 'win32') {
+		// Windows 10 build 10586 is the first Windows release that supports 256 colors.
+		// Windows 10 build 14931 is the first release that supports 16m/TrueColor.
+		const osRelease = os.release().split('.');
+		if (
+			Number(osRelease[0]) >= 10 &&
+			Number(osRelease[2]) >= 10586
+		) {
+			return Number(osRelease[2]) >= 14931 ? 3 : 2;
+		}
+
+		return 1;
+	}
+
+	if ('CI' in env) {
+		if (['TRAVIS', 'CIRCLECI', 'APPVEYOR', 'GITLAB_CI', 'GITHUB_ACTIONS', 'BUILDKITE'].some(sign => sign in env) || env.CI_NAME === 'codeship') {
+			return 1;
+		}
+
+		return min;
+	}
+
+	if ('TEAMCITY_VERSION' in env) {
+		return /^(9\.(0*[1-9]\d*)\.|\d{2,}\.)/.test(env.TEAMCITY_VERSION) ? 1 : 0;
+	}
+
+	if (env.COLORTERM === 'truecolor') {
+		return 3;
+	}
+
+	if ('TERM_PROGRAM' in env) {
+		const version = parseInt((env.TERM_PROGRAM_VERSION || '').split('.')[0], 10);
+
+		switch (env.TERM_PROGRAM) {
+			case 'iTerm.app':
+				return version >= 3 ? 3 : 2;
+			case 'Apple_Terminal':
+				return 2;
+			// No default
+		}
+	}
+
+	if (/-256(color)?$/i.test(env.TERM)) {
+		return 2;
+	}
+
+	if (/^screen|^xterm|^vt100|^vt220|^rxvt|color|ansi|cygwin|linux/i.test(env.TERM)) {
+		return 1;
+	}
+
+	if ('COLORTERM' in env) {
+		return 1;
+	}
+
+	return min;
+}
+
+function getSupportLevel(stream) {
+	const level = supportsColor(stream, stream && stream.isTTY);
+	return translateLevel(level);
+}
+
+module.exports = {
+	supportsColor: getSupportLevel,
+	stdout: translateLevel(supportsColor(true, tty.isatty(1))),
+	stderr: translateLevel(supportsColor(true, tty.isatty(2)))
+};
+
+
+/***/ }),
+
 /***/ 1860:
 /***/ ((module) => {
 
@@ -15554,7 +15768,7 @@ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ***************************************************************************** */
-/* global global, define, Symbol, Reflect, Promise, SuppressedError */
+/* global global, define, Symbol, Reflect, Promise, SuppressedError, Iterator */
 var __extends;
 var __assign;
 var __rest;
@@ -15586,6 +15800,7 @@ var __classPrivateFieldIn;
 var __createBinding;
 var __addDisposableResource;
 var __disposeResources;
+var __rewriteRelativeImportExtension;
 (function (factory) {
     var root = typeof global === "object" ? global : typeof self === "object" ? self : typeof this === "object" ? this : {};
     if (typeof define === "function" && define.amd) {
@@ -15713,8 +15928,8 @@ var __disposeResources;
     };
 
     __generator = function (thisArg, body) {
-        var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
-        return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+        var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+        return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
         function verb(n) { return function (v) { return step([n, v]); }; }
         function step(op) {
             if (f) throw new TypeError("Generator is already executing.");
@@ -15818,7 +16033,7 @@ var __disposeResources;
     __asyncGenerator = function (thisArg, _arguments, generator) {
         if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
         var g = generator.apply(thisArg, _arguments || []), i, q = [];
-        return i = {}, verb("next"), verb("throw"), verb("return", awaitReturn), i[Symbol.asyncIterator] = function () { return this; }, i;
+        return i = Object.create((typeof AsyncIterator === "function" ? AsyncIterator : Object).prototype), verb("next"), verb("throw"), verb("return", awaitReturn), i[Symbol.asyncIterator] = function () { return this; }, i;
         function awaitReturn(f) { return function (v) { return Promise.resolve(v).then(f, reject); }; }
         function verb(n, f) { if (g[n]) { i[n] = function (v) { return new Promise(function (a, b) { q.push([n, v, a, b]) > 1 || resume(n, v); }); }; if (f) i[n] = f(i[n]); } }
         function resume(n, v) { try { step(g[n](v)); } catch (e) { settle(q[0][3], e); } }
@@ -15853,10 +16068,19 @@ var __disposeResources;
         o["default"] = v;
     };
 
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+
     __importStar = function (mod) {
         if (mod && mod.__esModule) return mod;
         var result = {};
-        if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
         __setModuleDefault(result, mod);
         return result;
     };
@@ -15916,20 +16140,34 @@ var __disposeResources;
             env.error = env.hasError ? new _SuppressedError(e, env.error, "An error was suppressed during disposal.") : e;
             env.hasError = true;
         }
+        var r, s = 0;
         function next() {
-            while (env.stack.length) {
-                var rec = env.stack.pop();
+            while (r = env.stack.pop()) {
                 try {
-                    var result = rec.dispose && rec.dispose.call(rec.value);
-                    if (rec.async) return Promise.resolve(result).then(next, function(e) { fail(e); return next(); });
+                    if (!r.async && s === 1) return s = 0, env.stack.push(r), Promise.resolve().then(next);
+                    if (r.dispose) {
+                        var result = r.dispose.call(r.value);
+                        if (r.async) return s |= 2, Promise.resolve(result).then(next, function(e) { fail(e); return next(); });
+                    }
+                    else s |= 1;
                 }
                 catch (e) {
                     fail(e);
                 }
             }
+            if (s === 1) return env.hasError ? Promise.reject(env.error) : Promise.resolve();
             if (env.hasError) throw env.error;
         }
         return next();
+    };
+
+    __rewriteRelativeImportExtension = function (path, preserveJsx) {
+        if (typeof path === "string" && /^\.\.?\//.test(path)) {
+            return path.replace(/\.(tsx)$|((?:\.d)?)((?:\.[^./]+?)?)\.([cm]?)ts$/i, function (m, tsx, d, ext, cm) {
+                return tsx ? preserveJsx ? ".jsx" : ".js" : d && (!ext || !cm) ? m : (d + ext + "." + cm.toLowerCase() + "js");
+            });
+        }
+        return path;
     };
 
     exporter("__extends", __extends);
@@ -15963,7 +16201,10 @@ var __disposeResources;
     exporter("__classPrivateFieldIn", __classPrivateFieldIn);
     exporter("__addDisposableResource", __addDisposableResource);
     exporter("__disposeResources", __disposeResources);
+    exporter("__rewriteRelativeImportExtension", __rewriteRelativeImportExtension);
 });
+
+0 && (0);
 
 
 /***/ }),
@@ -39102,7 +39343,6 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.Client = void 0;
-/* eslint-disable @typescript-eslint/space-before-function-paren */
 const core = __importStar(__nccwpck_require__(7484));
 const identity_1 = __nccwpck_require__(3983);
 const keyvault_secrets_1 = __nccwpck_require__(3602);
@@ -39218,7 +39458,6 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.isDebug = isDebug;
 exports.parseNumber = parseNumber;
 exports.parseBoolean = parseBoolean;
-/* eslint-disable @typescript-eslint/space-before-function-paren */
 function isDebug() {
     return process.env.RUNNER_DEBUG === '1';
 }
@@ -39257,7 +39496,6 @@ function parseBoolean(value) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.parseSecretName = parseSecretName;
 exports.parseSecretsInput = parseSecretsInput;
-/* eslint-disable @typescript-eslint/space-before-function-paren */
 const spaceOrSpecialReplaceChar = '_';
 const separatorReplaceChar = '__';
 function parseSecretName(secretName, separator = '') {
@@ -39275,14 +39513,6 @@ function parseSecretsInput(secretsInput) {
         .map(secret => secret.trim())
         .filter(secret => secret !== '');
 }
-
-
-/***/ }),
-
-/***/ 75:
-/***/ ((module) => {
-
-module.exports = eval("require")("supports-color");
 
 
 /***/ }),
@@ -42095,7 +42325,7 @@ exports.flattenResponse = flattenResponse;
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ExtendedServiceClient = void 0;
 const disableKeepAlivePolicy_js_1 = __nccwpck_require__(2639);
@@ -42157,9 +42387,9 @@ exports.ExtendedServiceClient = ExtendedServiceClient;
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.convertHttpClient = void 0;
+exports.convertHttpClient = convertHttpClient;
 const response_js_1 = __nccwpck_require__(8153);
 const util_js_1 = __nccwpck_require__(3850);
 /**
@@ -42175,7 +42405,6 @@ function convertHttpClient(requestPolicyClient) {
         },
     };
 }
-exports.convertHttpClient = convertHttpClient;
 //# sourceMappingURL=httpClientAdapter.js.map
 
 /***/ }),
@@ -42186,7 +42415,7 @@ exports.convertHttpClient = convertHttpClient;
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.toHttpHeadersLike = exports.convertHttpClient = exports.disableKeepAlivePolicyName = exports.HttpPipelineLogLevel = exports.createRequestPolicyFactoryPolicy = exports.requestPolicyFactoryPolicyName = exports.ExtendedServiceClient = void 0;
 /**
@@ -42216,9 +42445,11 @@ Object.defineProperty(exports, "toHttpHeadersLike", ({ enumerable: true, get: fu
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.pipelineContainsDisableKeepAlivePolicy = exports.createDisableKeepAlivePolicy = exports.disableKeepAlivePolicyName = void 0;
+exports.disableKeepAlivePolicyName = void 0;
+exports.createDisableKeepAlivePolicy = createDisableKeepAlivePolicy;
+exports.pipelineContainsDisableKeepAlivePolicy = pipelineContainsDisableKeepAlivePolicy;
 exports.disableKeepAlivePolicyName = "DisableKeepAlivePolicy";
 function createDisableKeepAlivePolicy() {
     return {
@@ -42229,14 +42460,12 @@ function createDisableKeepAlivePolicy() {
         },
     };
 }
-exports.createDisableKeepAlivePolicy = createDisableKeepAlivePolicy;
 /**
  * @internal
  */
 function pipelineContainsDisableKeepAlivePolicy(pipeline) {
     return pipeline.getOrderedPolicies().some((policy) => policy.name === exports.disableKeepAlivePolicyName);
 }
-exports.pipelineContainsDisableKeepAlivePolicy = pipelineContainsDisableKeepAlivePolicy;
 //# sourceMappingURL=disableKeepAlivePolicy.js.map
 
 /***/ }),
@@ -42247,9 +42476,10 @@ exports.pipelineContainsDisableKeepAlivePolicy = pipelineContainsDisableKeepAliv
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createRequestPolicyFactoryPolicy = exports.requestPolicyFactoryPolicyName = exports.HttpPipelineLogLevel = void 0;
+exports.requestPolicyFactoryPolicyName = exports.HttpPipelineLogLevel = void 0;
+exports.createRequestPolicyFactoryPolicy = createRequestPolicyFactoryPolicy;
 const util_js_1 = __nccwpck_require__(3850);
 const response_js_1 = __nccwpck_require__(8153);
 /**
@@ -42298,7 +42528,6 @@ function createRequestPolicyFactoryPolicy(factories) {
         },
     };
 }
-exports.createRequestPolicyFactoryPolicy = createRequestPolicyFactoryPolicy;
 //# sourceMappingURL=requestPolicyFactoryPolicy.js.map
 
 /***/ }),
@@ -42309,9 +42538,10 @@ exports.createRequestPolicyFactoryPolicy = createRequestPolicyFactoryPolicy;
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.toPipelineResponse = exports.toCompatResponse = void 0;
+exports.toCompatResponse = toCompatResponse;
+exports.toPipelineResponse = toPipelineResponse;
 const core_rest_pipeline_1 = __nccwpck_require__(778);
 const util_js_1 = __nccwpck_require__(3850);
 const originalResponse = Symbol("Original FullOperationResponse");
@@ -42353,7 +42583,6 @@ function toCompatResponse(response, options) {
             headers });
     }
 }
-exports.toCompatResponse = toCompatResponse;
 /**
  * A helper to convert back to a PipelineResponse
  * @param compatResponse - A response compatible with `HttpOperationResponse` from core-http.
@@ -42370,7 +42599,6 @@ function toPipelineResponse(compatResponse) {
         return Object.assign(Object.assign({}, compatResponse), { headers, request: (0, util_js_1.toPipelineRequest)(compatResponse.request) });
     }
 }
-exports.toPipelineResponse = toPipelineResponse;
 //# sourceMappingURL=response.js.map
 
 /***/ }),
@@ -42381,9 +42609,12 @@ exports.toPipelineResponse = toPipelineResponse;
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.HttpHeaders = exports.toHttpHeadersLike = exports.toWebResourceLike = exports.toPipelineRequest = void 0;
+exports.HttpHeaders = void 0;
+exports.toPipelineRequest = toPipelineRequest;
+exports.toWebResourceLike = toWebResourceLike;
+exports.toHttpHeadersLike = toHttpHeadersLike;
 const core_rest_pipeline_1 = __nccwpck_require__(778);
 // We use a custom symbol to cache a reference to the original request without
 // exposing it on the public interface.
@@ -42417,6 +42648,7 @@ function toPipelineRequest(webResource, options = {}) {
             onUploadProgress: webResource.onUploadProgress,
             proxySettings: webResource.proxySettings,
             streamResponseStatusCodes: webResource.streamResponseStatusCodes,
+            agent: webResource.agent,
         });
         if (options.originalRequest) {
             newRequest[originalClientRequestSymbol] =
@@ -42425,7 +42657,6 @@ function toPipelineRequest(webResource, options = {}) {
         return newRequest;
     }
 }
-exports.toPipelineRequest = toPipelineRequest;
 function toWebResourceLike(request, options) {
     var _a;
     const originalRequest = (_a = options === null || options === void 0 ? void 0 : options.originalRequest) !== null && _a !== void 0 ? _a : request;
@@ -42444,6 +42675,7 @@ function toWebResourceLike(request, options) {
         onUploadProgress: request.onUploadProgress,
         proxySettings: request.proxySettings,
         streamResponseStatusCodes: request.streamResponseStatusCodes,
+        agent: request.agent,
         clone() {
             throw new Error("Cannot clone a non-proxied WebResourceLike");
         },
@@ -42487,6 +42719,7 @@ function toWebResourceLike(request, options) {
                     "onUploadProgress",
                     "proxySettings",
                     "streamResponseStatusCodes",
+                    "agent",
                 ];
                 if (typeof prop === "string" && passThroughProps.includes(prop)) {
                     request[prop] = value;
@@ -42499,7 +42732,6 @@ function toWebResourceLike(request, options) {
         return webResource;
     }
 }
-exports.toWebResourceLike = toWebResourceLike;
 /**
  * Converts HttpHeaders from core-rest-pipeline to look like
  * HttpHeaders from core-http.
@@ -42509,7 +42741,6 @@ exports.toWebResourceLike = toWebResourceLike;
 function toHttpHeadersLike(headers) {
     return new HttpHeaders(headers.toJSON({ preserveCase: true }));
 }
-exports.toHttpHeadersLike = toHttpHeadersLike;
 /**
  * A collection of HttpHeaders that can be sent with a HTTP request.
  */
@@ -44014,7 +44245,7 @@ exports.buildCreatePoller = buildCreatePoller;
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DEFAULT_RETRY_POLICY_COUNT = exports.SDK_VERSION = void 0;
-exports.SDK_VERSION = "1.17.0";
+exports.SDK_VERSION = "1.19.0";
 exports.DEFAULT_RETRY_POLICY_COUNT = 3;
 //# sourceMappingURL=constants.js.map
 
@@ -44040,6 +44271,7 @@ const formDataPolicy_js_1 = __nccwpck_require__(5497);
 const core_util_1 = __nccwpck_require__(7779);
 const proxyPolicy_js_1 = __nccwpck_require__(2815);
 const setClientRequestIdPolicy_js_1 = __nccwpck_require__(5686);
+const agentPolicy_js_1 = __nccwpck_require__(8554);
 const tlsPolicy_js_1 = __nccwpck_require__(5798);
 const tracingPolicy_js_1 = __nccwpck_require__(3237);
 /**
@@ -44050,6 +44282,9 @@ function createPipelineFromOptions(options) {
     var _a;
     const pipeline = (0, pipeline_js_1.createEmptyPipeline)();
     if (core_util_1.isNodeLike) {
+        if (options.agent) {
+            pipeline.addPolicy((0, agentPolicy_js_1.agentPolicy)(options.agent));
+        }
         if (options.tlsOptions) {
             pipeline.addPolicy((0, tlsPolicy_js_1.tlsPolicy)(options.tlsOptions));
         }
@@ -44206,7 +44441,7 @@ function createHttpHeaders(rawHeaders) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createFileFromStream = exports.createFile = exports.auxiliaryAuthenticationHeaderPolicyName = exports.auxiliaryAuthenticationHeaderPolicy = exports.ndJsonPolicyName = exports.ndJsonPolicy = exports.bearerTokenAuthenticationPolicyName = exports.bearerTokenAuthenticationPolicy = exports.formDataPolicyName = exports.formDataPolicy = exports.tlsPolicyName = exports.tlsPolicy = exports.userAgentPolicyName = exports.userAgentPolicy = exports.defaultRetryPolicy = exports.tracingPolicyName = exports.tracingPolicy = exports.retryPolicy = exports.throttlingRetryPolicyName = exports.throttlingRetryPolicy = exports.systemErrorRetryPolicyName = exports.systemErrorRetryPolicy = exports.redirectPolicyName = exports.redirectPolicy = exports.getDefaultProxySettings = exports.proxyPolicyName = exports.proxyPolicy = exports.multipartPolicyName = exports.multipartPolicy = exports.logPolicyName = exports.logPolicy = exports.setClientRequestIdPolicyName = exports.setClientRequestIdPolicy = exports.exponentialRetryPolicyName = exports.exponentialRetryPolicy = exports.decompressResponsePolicyName = exports.decompressResponsePolicy = exports.isRestError = exports.RestError = exports.createPipelineRequest = exports.createHttpHeaders = exports.createDefaultHttpClient = exports.createPipelineFromOptions = exports.createEmptyPipeline = void 0;
+exports.createFileFromStream = exports.createFile = exports.agentPolicyName = exports.agentPolicy = exports.auxiliaryAuthenticationHeaderPolicyName = exports.auxiliaryAuthenticationHeaderPolicy = exports.ndJsonPolicyName = exports.ndJsonPolicy = exports.bearerTokenAuthenticationPolicyName = exports.bearerTokenAuthenticationPolicy = exports.formDataPolicyName = exports.formDataPolicy = exports.tlsPolicyName = exports.tlsPolicy = exports.userAgentPolicyName = exports.userAgentPolicy = exports.defaultRetryPolicy = exports.tracingPolicyName = exports.tracingPolicy = exports.retryPolicy = exports.throttlingRetryPolicyName = exports.throttlingRetryPolicy = exports.systemErrorRetryPolicyName = exports.systemErrorRetryPolicy = exports.redirectPolicyName = exports.redirectPolicy = exports.getDefaultProxySettings = exports.proxyPolicyName = exports.proxyPolicy = exports.multipartPolicyName = exports.multipartPolicy = exports.logPolicyName = exports.logPolicy = exports.setClientRequestIdPolicyName = exports.setClientRequestIdPolicy = exports.exponentialRetryPolicyName = exports.exponentialRetryPolicy = exports.decompressResponsePolicyName = exports.decompressResponsePolicy = exports.isRestError = exports.RestError = exports.createPipelineRequest = exports.createHttpHeaders = exports.createDefaultHttpClient = exports.createPipelineFromOptions = exports.createEmptyPipeline = void 0;
 var pipeline_js_1 = __nccwpck_require__(9590);
 Object.defineProperty(exports, "createEmptyPipeline", ({ enumerable: true, get: function () { return pipeline_js_1.createEmptyPipeline; } }));
 var createPipelineFromOptions_js_1 = __nccwpck_require__(862);
@@ -44273,6 +44508,9 @@ Object.defineProperty(exports, "ndJsonPolicyName", ({ enumerable: true, get: fun
 var auxiliaryAuthenticationHeaderPolicy_js_1 = __nccwpck_require__(2262);
 Object.defineProperty(exports, "auxiliaryAuthenticationHeaderPolicy", ({ enumerable: true, get: function () { return auxiliaryAuthenticationHeaderPolicy_js_1.auxiliaryAuthenticationHeaderPolicy; } }));
 Object.defineProperty(exports, "auxiliaryAuthenticationHeaderPolicyName", ({ enumerable: true, get: function () { return auxiliaryAuthenticationHeaderPolicy_js_1.auxiliaryAuthenticationHeaderPolicyName; } }));
+var agentPolicy_js_1 = __nccwpck_require__(8554);
+Object.defineProperty(exports, "agentPolicy", ({ enumerable: true, get: function () { return agentPolicy_js_1.agentPolicy; } }));
+Object.defineProperty(exports, "agentPolicyName", ({ enumerable: true, get: function () { return agentPolicy_js_1.agentPolicyName; } }));
 var file_js_1 = __nccwpck_require__(7073);
 Object.defineProperty(exports, "createFile", ({ enumerable: true, get: function () { return file_js_1.createFile; } }));
 Object.defineProperty(exports, "createFileFromStream", ({ enumerable: true, get: function () { return file_js_1.createFileFromStream; } }));
@@ -44319,6 +44557,9 @@ function isReadableStream(body) {
     return body && typeof body.pipe === "function";
 }
 function isStreamComplete(stream) {
+    if (stream.readable === false) {
+        return Promise.resolve();
+    }
     return new Promise((resolve) => {
         const handler = () => {
             resolve();
@@ -44949,6 +45190,8 @@ class PipelineRequestImpl {
         this.requestId = options.requestId || (0, core_util_1.randomUUID)();
         this.allowInsecureConnection = (_f = options.allowInsecureConnection) !== null && _f !== void 0 ? _f : false;
         this.enableBrowserStreams = (_g = options.enableBrowserStreams) !== null && _g !== void 0 ? _g : false;
+        this.agent = options.agent;
+        this.tlsSettings = options.tlsSettings;
     }
 }
 /**
@@ -44960,6 +45203,39 @@ function createPipelineRequest(options) {
     return new PipelineRequestImpl(options);
 }
 //# sourceMappingURL=pipelineRequest.js.map
+
+/***/ }),
+
+/***/ 8554:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.agentPolicyName = void 0;
+exports.agentPolicy = agentPolicy;
+/**
+ * Name of the Agent Policy
+ */
+exports.agentPolicyName = "agentPolicy";
+/**
+ * Gets a pipeline policy that sets http.agent
+ */
+function agentPolicy(agent) {
+    return {
+        name: exports.agentPolicyName,
+        sendRequest: async (req, next) => {
+            // Users may define an agent on the request, honor it over the client level one
+            if (!req.agent) {
+                req.agent = agent;
+            }
+            return next(req);
+        },
+    };
+}
+//# sourceMappingURL=agentPolicy.js.map
 
 /***/ }),
 
@@ -45047,20 +45323,46 @@ function auxiliaryAuthenticationHeaderPolicy(options) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.bearerTokenAuthenticationPolicyName = void 0;
 exports.bearerTokenAuthenticationPolicy = bearerTokenAuthenticationPolicy;
+exports.parseChallenges = parseChallenges;
 const tokenCycler_js_1 = __nccwpck_require__(9202);
 const log_js_1 = __nccwpck_require__(544);
+const restError_js_1 = __nccwpck_require__(8666);
 /**
  * The programmatic identifier of the bearerTokenAuthenticationPolicy.
  */
 exports.bearerTokenAuthenticationPolicyName = "bearerTokenAuthenticationPolicy";
 /**
+ * Try to send the given request.
+ *
+ * When a response is received, returns a tuple of the response received and, if the response was received
+ * inside a thrown RestError, the RestError that was thrown.
+ *
+ * Otherwise, if an error was thrown while sending the request that did not provide an underlying response, it
+ * will be rethrown.
+ */
+async function trySendRequest(request, next) {
+    try {
+        return [await next(request), undefined];
+    }
+    catch (e) {
+        if ((0, restError_js_1.isRestError)(e) && e.response) {
+            return [e.response, e];
+        }
+        else {
+            throw e;
+        }
+    }
+}
+/**
  * Default authorize request handler
  */
 async function defaultAuthorizeRequest(options) {
     const { scopes, getAccessToken, request } = options;
+    // Enable CAE true by default
     const getTokenOptions = {
         abortSignal: request.abortSignal,
         tracingOptions: request.tracingOptions,
+        enableCae: true,
     };
     const accessToken = await getAccessToken(scopes, getTokenOptions);
     if (accessToken) {
@@ -45071,22 +45373,39 @@ async function defaultAuthorizeRequest(options) {
  * We will retrieve the challenge only if the response status code was 401,
  * and if the response contained the header "WWW-Authenticate" with a non-empty value.
  */
-function getChallenge(response) {
-    const challenge = response.headers.get("WWW-Authenticate");
-    if (response.status === 401 && challenge) {
-        return challenge;
+function isChallengeResponse(response) {
+    return response.status === 401 && response.headers.has("WWW-Authenticate");
+}
+/**
+ * Re-authorize the request for CAE challenge.
+ * The response containing the challenge is `options.response`.
+ * If this method returns true, the underlying request will be sent once again.
+ */
+async function authorizeRequestOnCaeChallenge(onChallengeOptions, caeClaims) {
+    var _a;
+    const { scopes } = onChallengeOptions;
+    const accessToken = await onChallengeOptions.getAccessToken(scopes, {
+        enableCae: true,
+        claims: caeClaims,
+    });
+    if (!accessToken) {
+        return false;
     }
-    return;
+    onChallengeOptions.request.headers.set("Authorization", `${(_a = accessToken.tokenType) !== null && _a !== void 0 ? _a : "Bearer"} ${accessToken.token}`);
+    return true;
 }
 /**
  * A policy that can request a token from a TokenCredential implementation and
  * then apply it to the Authorization header of a request as a Bearer token.
  */
 function bearerTokenAuthenticationPolicy(options) {
-    var _a;
+    var _a, _b, _c;
     const { credential, scopes, challengeCallbacks } = options;
     const logger = options.logger || log_js_1.logger;
-    const callbacks = Object.assign({ authorizeRequest: (_a = challengeCallbacks === null || challengeCallbacks === void 0 ? void 0 : challengeCallbacks.authorizeRequest) !== null && _a !== void 0 ? _a : defaultAuthorizeRequest, authorizeRequestOnChallenge: challengeCallbacks === null || challengeCallbacks === void 0 ? void 0 : challengeCallbacks.authorizeRequestOnChallenge }, challengeCallbacks);
+    const callbacks = {
+        authorizeRequest: (_b = (_a = challengeCallbacks === null || challengeCallbacks === void 0 ? void 0 : challengeCallbacks.authorizeRequest) === null || _a === void 0 ? void 0 : _a.bind(challengeCallbacks)) !== null && _b !== void 0 ? _b : defaultAuthorizeRequest,
+        authorizeRequestOnChallenge: (_c = challengeCallbacks === null || challengeCallbacks === void 0 ? void 0 : challengeCallbacks.authorizeRequestOnChallenge) === null || _c === void 0 ? void 0 : _c.bind(challengeCallbacks),
+    };
     // This function encapsulates the entire process of reliably retrieving the token
     // The options are left out of the public API until there's demand to configure this.
     // Remember to extend `BearerTokenAuthenticationPolicyOptions` with `TokenCyclerOptions`
@@ -45121,26 +45440,71 @@ function bearerTokenAuthenticationPolicy(options) {
             });
             let response;
             let error;
-            try {
-                response = await next(request);
-            }
-            catch (err) {
-                error = err;
-                response = err.response;
-            }
-            if (callbacks.authorizeRequestOnChallenge &&
-                (response === null || response === void 0 ? void 0 : response.status) === 401 &&
-                getChallenge(response)) {
-                // processes challenge
-                const shouldSendRequest = await callbacks.authorizeRequestOnChallenge({
-                    scopes: Array.isArray(scopes) ? scopes : [scopes],
-                    request,
-                    response,
-                    getAccessToken,
-                    logger,
-                });
-                if (shouldSendRequest) {
-                    return next(request);
+            let shouldSendRequest;
+            [response, error] = await trySendRequest(request, next);
+            if (isChallengeResponse(response)) {
+                let claims = getCaeChallengeClaims(response.headers.get("WWW-Authenticate"));
+                // Handle CAE by default when receive CAE claim
+                if (claims) {
+                    let parsedClaim;
+                    // Return the response immediately if claims is not a valid base64 encoded string
+                    try {
+                        parsedClaim = atob(claims);
+                    }
+                    catch (e) {
+                        logger.warning(`The WWW-Authenticate header contains "claims" that cannot be parsed. Unable to perform the Continuous Access Evaluation authentication flow. Unparsable claims: ${claims}`);
+                        return response;
+                    }
+                    shouldSendRequest = await authorizeRequestOnCaeChallenge({
+                        scopes: Array.isArray(scopes) ? scopes : [scopes],
+                        response,
+                        request,
+                        getAccessToken,
+                        logger,
+                    }, parsedClaim);
+                    // Send updated request and handle response for RestError
+                    if (shouldSendRequest) {
+                        [response, error] = await trySendRequest(request, next);
+                    }
+                }
+                else if (callbacks.authorizeRequestOnChallenge) {
+                    // Handle custom challenges when client provides custom callback
+                    shouldSendRequest = await callbacks.authorizeRequestOnChallenge({
+                        scopes: Array.isArray(scopes) ? scopes : [scopes],
+                        request,
+                        response,
+                        getAccessToken,
+                        logger,
+                    });
+                    // Send updated request and handle response for RestError
+                    if (shouldSendRequest) {
+                        [response, error] = await trySendRequest(request, next);
+                    }
+                    // If we get another CAE Claim, we will handle it by default and return whatever value we receive for this
+                    if (isChallengeResponse(response)) {
+                        claims = getCaeChallengeClaims(response.headers.get("WWW-Authenticate"));
+                        if (claims) {
+                            let parsedClaim;
+                            try {
+                                parsedClaim = atob(claims);
+                            }
+                            catch (e) {
+                                logger.warning(`The WWW-Authenticate header contains "claims" that cannot be parsed. Unable to perform the Continuous Access Evaluation authentication flow. Unparsable claims: ${claims}`);
+                                return response;
+                            }
+                            shouldSendRequest = await authorizeRequestOnCaeChallenge({
+                                scopes: Array.isArray(scopes) ? scopes : [scopes],
+                                response,
+                                request,
+                                getAccessToken,
+                                logger,
+                            }, parsedClaim);
+                            // Send updated request and handle response for RestError
+                            if (shouldSendRequest) {
+                                [response, error] = await trySendRequest(request, next);
+                            }
+                        }
+                    }
                 }
             }
             if (error) {
@@ -45151,6 +45515,49 @@ function bearerTokenAuthenticationPolicy(options) {
             }
         },
     };
+}
+/**
+ * Converts: `Bearer a="b", c="d", Pop e="f", g="h"`.
+ * Into: `[ { scheme: 'Bearer', params: { a: 'b', c: 'd' } }, { scheme: 'Pop', params: { e: 'f', g: 'h' } } ]`.
+ *
+ * @internal
+ */
+function parseChallenges(challenges) {
+    // Challenge regex seperates the string to individual challenges with different schemes in the format `Scheme a="b", c=d`
+    // The challenge regex captures parameteres with either quotes values or unquoted values
+    const challengeRegex = /(\w+)\s+((?:\w+=(?:"[^"]*"|[^,]*),?\s*)+)/g;
+    // Parameter regex captures the claims group removed from the scheme in the format `a="b"` and `c="d"`
+    // CAE challenge always have quoted parameters. For more reference, https://learn.microsoft.com/entra/identity-platform/claims-challenge
+    const paramRegex = /(\w+)="([^"]*)"/g;
+    const parsedChallenges = [];
+    let match;
+    // Iterate over each challenge match
+    while ((match = challengeRegex.exec(challenges)) !== null) {
+        const scheme = match[1];
+        const paramsString = match[2];
+        const params = {};
+        let paramMatch;
+        // Iterate over each parameter match
+        while ((paramMatch = paramRegex.exec(paramsString)) !== null) {
+            params[paramMatch[1]] = paramMatch[2];
+        }
+        parsedChallenges.push({ scheme, params });
+    }
+    return parsedChallenges;
+}
+/**
+ * Parse a pipeline response and look for a CAE challenge with "Bearer" scheme
+ * Return the value in the header without parsing the challenge
+ * @internal
+ */
+function getCaeChallengeClaims(challenges) {
+    var _a;
+    if (!challenges) {
+        return;
+    }
+    // Find all challenges present in the header
+    const parsedChallenges = parseChallenges(challenges);
+    return (_a = parsedChallenges.find((x) => x.scheme === "Bearer" && x.params.claims && x.params.error === "insufficient_claims")) === null || _a === void 0 ? void 0 : _a.params.claims;
 }
 //# sourceMappingURL=bearerTokenAuthenticationPolicy.js.map
 
@@ -45867,7 +46274,6 @@ function retryPolicy(strategies, options = { maxRetries: constants_js_1.DEFAULT_
             let response;
             let responseError;
             let retryCount = -1;
-            // eslint-disable-next-line no-constant-condition
             retryRequest: while (true) {
                 retryCount += 1;
                 response = undefined;
@@ -46047,9 +46453,9 @@ exports.throttlingRetryPolicyName = "throttlingRetryPolicy";
  * A policy that retries when the server sends a 429 response with a Retry-After header.
  *
  * To learn more, please refer to
- * https://docs.microsoft.com/en-us/azure/azure-resource-manager/resource-manager-request-limits,
- * https://docs.microsoft.com/en-us/azure/azure-subscription-service-limits and
- * https://docs.microsoft.com/en-us/azure/virtual-machines/troubleshooting/troubleshooting-throttling-errors
+ * https://learn.microsoft.com/en-us/azure/azure-resource-manager/resource-manager-request-limits,
+ * https://learn.microsoft.com/en-us/azure/azure-subscription-service-limits and
+ * https://learn.microsoft.com/en-us/azure/virtual-machines/troubleshooting/troubleshooting-throttling-errors
  *
  * @param options - Options that configure retry logic.
  */
@@ -46224,9 +46630,14 @@ function tryProcessResponse(span, response) {
         if (serviceRequestId) {
             span.setAttribute("serviceRequestId", serviceRequestId);
         }
-        span.setStatus({
-            status: "success",
-        });
+        // Per semantic conventions, only set the status to error if the status code is 4xx or 5xx.
+        // Otherwise, the status MUST remain unset.
+        // https://opentelemetry.io/docs/specs/semconv/http/http-spans/#status
+        if (response.status >= 400) {
+            span.setStatus({
+                status: "error",
+            });
+        }
         span.end();
     }
     catch (e) {
@@ -46365,7 +46776,6 @@ function exponentialRetryStrategy(options = {}) {
     var _a, _b;
     const retryInterval = (_a = options.retryDelayInMs) !== null && _a !== void 0 ? _a : DEFAULT_CLIENT_RETRY_INTERVAL;
     const maxRetryInterval = (_b = options.maxRetryDelayInMs) !== null && _b !== void 0 ? _b : DEFAULT_CLIENT_MAX_RETRY_INTERVAL;
-    let retryAfterInMs = retryInterval;
     return {
         name: "exponentialRetryStrategy",
         retry({ retryCount, response, responseError }) {
@@ -46380,15 +46790,10 @@ function exponentialRetryStrategy(options = {}) {
             if (responseError && !matchedSystemError && !isExponential) {
                 return { errorToThrow: responseError };
             }
-            // Exponentially increase the delay each time
-            const exponentialDelay = retryAfterInMs * Math.pow(2, retryCount);
-            // Don't let the delay exceed the maximum
-            const clampedExponentialDelay = Math.min(maxRetryInterval, exponentialDelay);
-            // Allow the final value to have some "jitter" (within 50% of the delay size) so
-            // that retries across multiple clients don't occur simultaneously.
-            retryAfterInMs =
-                clampedExponentialDelay / 2 + (0, core_util_1.getRandomIntegerInclusive)(0, clampedExponentialDelay / 2);
-            return { retryAfterInMs };
+            return (0, core_util_1.calculateRetryDelay)(retryCount, {
+                retryDelayInMs: retryInterval,
+                maxRetryDelayInMs: maxRetryInterval,
+            });
         },
     };
 }
@@ -46620,6 +47025,9 @@ const core_util_1 = __nccwpck_require__(7779);
 const typeGuards_js_1 = __nccwpck_require__(2621);
 const unimplementedMethods = {
     arrayBuffer: () => {
+        throw new Error("Not implemented");
+    },
+    bytes: () => {
         throw new Error("Not implemented");
     },
     slice: () => {
@@ -47238,7 +47646,7 @@ async function setPlatformSpecificData(map) {
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.createTracingClient = exports.useInstrumenter = void 0;
 var instrumenter_js_1 = __nccwpck_require__(8729);
@@ -47255,9 +47663,12 @@ Object.defineProperty(exports, "createTracingClient", ({ enumerable: true, get: 
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getInstrumenter = exports.useInstrumenter = exports.createDefaultInstrumenter = exports.createDefaultTracingSpan = void 0;
+exports.createDefaultTracingSpan = createDefaultTracingSpan;
+exports.createDefaultInstrumenter = createDefaultInstrumenter;
+exports.useInstrumenter = useInstrumenter;
+exports.getInstrumenter = getInstrumenter;
 const tracingContext_js_1 = __nccwpck_require__(9186);
 const state_js_1 = __nccwpck_require__(8914);
 function createDefaultTracingSpan() {
@@ -47275,9 +47686,11 @@ function createDefaultTracingSpan() {
         setStatus: () => {
             // noop
         },
+        addEvent: () => {
+            // noop
+        },
     };
 }
-exports.createDefaultTracingSpan = createDefaultTracingSpan;
 function createDefaultInstrumenter() {
     return {
         createRequestHeaders: () => {
@@ -47297,7 +47710,6 @@ function createDefaultInstrumenter() {
         },
     };
 }
-exports.createDefaultInstrumenter = createDefaultInstrumenter;
 /**
  * Extends the Azure SDK with support for a given instrumenter implementation.
  *
@@ -47306,7 +47718,6 @@ exports.createDefaultInstrumenter = createDefaultInstrumenter;
 function useInstrumenter(instrumenter) {
     state_js_1.state.instrumenterImplementation = instrumenter;
 }
-exports.useInstrumenter = useInstrumenter;
 /**
  * Gets the currently set instrumenter, a No-Op instrumenter by default.
  *
@@ -47318,7 +47729,6 @@ function getInstrumenter() {
     }
     return state_js_1.state.instrumenterImplementation;
 }
-exports.getInstrumenter = getInstrumenter;
 //# sourceMappingURL=instrumenter.js.map
 
 /***/ }),
@@ -47329,7 +47739,7 @@ exports.getInstrumenter = getInstrumenter;
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.state = void 0;
 /**
@@ -47350,9 +47760,9 @@ exports.state = {
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createTracingClient = void 0;
+exports.createTracingClient = createTracingClient;
 const instrumenter_js_1 = __nccwpck_require__(8729);
 const tracingContext_js_1 = __nccwpck_require__(9186);
 /**
@@ -47424,7 +47834,6 @@ function createTracingClient(options) {
         createRequestHeaders,
     };
 }
-exports.createTracingClient = createTracingClient;
 //# sourceMappingURL=tracingClient.js.map
 
 /***/ }),
@@ -47435,9 +47844,10 @@ exports.createTracingClient = createTracingClient;
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.TracingContextImpl = exports.createTracingContext = exports.knownContextKeys = void 0;
+exports.TracingContextImpl = exports.knownContextKeys = void 0;
+exports.createTracingContext = createTracingContext;
 /** @internal */
 exports.knownContextKeys = {
     span: Symbol.for("@azure/core-tracing span"),
@@ -47460,7 +47870,6 @@ function createTracingContext(options = {}) {
     }
     return context;
 }
-exports.createTracingContext = createTracingContext;
 /** @internal */
 class TracingContextImpl {
     constructor(initialContext) {
@@ -52457,7 +52866,7 @@ module.exports = parseParams
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
-/*! @azure/msal-node v2.15.0 2024-10-03 */
+/*! @azure/msal-node v2.16.2 2024-11-19 */
 
 'use strict';
 
@@ -52473,17 +52882,21 @@ var path = __nccwpck_require__(6928);
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
  */
+/**
+ * This class serializes cache entities to be saved into in-memory object types defined internally
+ * @internal
+ */
 class Serializer {
     /**
      * serialize the JSON blob
-     * @param data
+     * @param data - JSON blob cache
      */
     static serializeJSONBlob(data) {
         return JSON.stringify(data);
     }
     /**
      * Serialize Accounts
-     * @param accCache
+     * @param accCache - cache of accounts
      */
     static serializeAccounts(accCache) {
         const accounts = {};
@@ -52509,7 +52922,7 @@ class Serializer {
     }
     /**
      * Serialize IdTokens
-     * @param idTCache
+     * @param idTCache - cache of ID tokens
      */
     static serializeIdTokens(idTCache) {
         const idTokens = {};
@@ -52528,7 +52941,7 @@ class Serializer {
     }
     /**
      * Serializes AccessTokens
-     * @param atCache
+     * @param atCache - cache of access tokens
      */
     static serializeAccessTokens(atCache) {
         const accessTokens = {};
@@ -52557,7 +52970,7 @@ class Serializer {
     }
     /**
      * Serialize refreshTokens
-     * @param rtCache
+     * @param rtCache - cache of refresh tokens
      */
     static serializeRefreshTokens(rtCache) {
         const refreshTokens = {};
@@ -52578,7 +52991,7 @@ class Serializer {
     }
     /**
      * Serialize amdtCache
-     * @param amdtCache
+     * @param amdtCache - cache of app metadata
      */
     static serializeAppMetadata(amdtCache) {
         const appMetadata = {};
@@ -52594,7 +53007,7 @@ class Serializer {
     }
     /**
      * Serialize the cache
-     * @param jsonContent
+     * @param inMemCache - itemised cache read from the JSON
      */
     static serializeAllCache(inMemCache) {
         return {
@@ -52607,7 +53020,7 @@ class Serializer {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -52702,6 +53115,7 @@ const OIDC_SCOPES = [...OIDC_DEFAULT_SCOPES, Constants$1.EMAIL_SCOPE];
  */
 const HeaderNames = {
     CONTENT_TYPE: "Content-Type",
+    CONTENT_LENGTH: "Content-Length",
     RETRY_AFTER: "Retry-After",
     CCS_HEADER: "X-AnchorMailbox",
     WWWAuthenticate: "WWW-Authenticate",
@@ -52899,7 +53313,7 @@ const CacheOutcome = {
 // Token renewal offset default in seconds
 const DEFAULT_TOKEN_RENEWAL_OFFSET_SEC = 300;
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -52916,7 +53330,7 @@ var AuthErrorCodes = /*#__PURE__*/Object.freeze({
     unexpectedError: unexpectedError
 });
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -52965,7 +53379,7 @@ function createAuthError(code, additionalMessage) {
         : AuthErrorMessages[code]);
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -53063,7 +53477,7 @@ var ClientAuthErrorCodes = /*#__PURE__*/Object.freeze({
     userTimeoutReached: userTimeoutReached
 });
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -53315,7 +53729,7 @@ function createClientAuthError(errorCode, additionalMessage) {
     return new ClientAuthError(errorCode, additionalMessage);
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -53354,7 +53768,7 @@ const DEFAULT_CRYPTO_IMPLEMENTATION = {
     },
 };
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -53545,12 +53959,12 @@ class Logger {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /* eslint-disable header/header */
 const name$1 = "@azure/msal-common";
-const version$1 = "14.15.0";
+const version$1 = "14.16.0";
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -53570,7 +53984,7 @@ const AzureCloudInstance = {
     AzureUsGovernment: "https://login.microsoftonline.us",
 };
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -53631,7 +54045,7 @@ function checkMaxAge(authTime, maxAge) {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -53676,7 +54090,7 @@ function delay(t, value) {
     return new Promise((resolve) => setTimeout(() => resolve(value), t));
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -54003,7 +54417,7 @@ function isAuthorityMetadataExpired(metadata) {
     return metadata.expiresAt <= nowSeconds();
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -54057,7 +54471,7 @@ var ClientConfigurationErrorCodes = /*#__PURE__*/Object.freeze({
     urlParseError: urlParseError
 });
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -54195,7 +54609,7 @@ function createClientConfigurationError(errorCode) {
     return new ClientConfigurationError(errorCode);
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -54292,7 +54706,7 @@ class StringUtils {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -54492,7 +54906,7 @@ class ScopeSet {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -54532,7 +54946,7 @@ function buildClientInfoFromHomeAccountId(homeAccountId) {
     };
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -54611,7 +55025,7 @@ function updateAccountTenantProfileData(baseAccountInfo, tenantProfile, idTokenC
     return updatedAccountInfo;
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -54626,7 +55040,7 @@ const AuthorityType = {
     Ciam: 3,
 };
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -54648,7 +55062,7 @@ function getTenantIdFromIdTokenClaims(idTokenClaims) {
     return null;
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -54661,7 +55075,7 @@ const ProtocolMode = {
     OIDC: "OIDC",
 };
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -54904,7 +55318,7 @@ class AccountEntity {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -54951,7 +55365,7 @@ function getDeserializedResponse(responseString) {
     return null;
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -55115,7 +55529,7 @@ class UrlString {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -55255,7 +55669,7 @@ function getCloudDiscoveryMetadataFromNetworkResponse(response, authorityHost) {
     return null;
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -55263,7 +55677,7 @@ function getCloudDiscoveryMetadataFromNetworkResponse(response, authorityHost) {
 const cacheQuotaExceededErrorCode = "cache_quota_exceeded";
 const cacheUnknownErrorCode = "cache_error_unknown";
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -55290,7 +55704,7 @@ class CacheError extends Error {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -56531,9 +56945,6 @@ class DefaultStorageClass extends CacheManager {
     getTokenKeys() {
         throw createClientAuthError(methodNotImplemented);
     }
-    async clear() {
-        throw createClientAuthError(methodNotImplemented);
-    }
     updateCredentialCacheKey() {
         throw createClientAuthError(methodNotImplemented);
     }
@@ -56542,7 +56953,7 @@ class DefaultStorageClass extends CacheManager {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -56641,161 +57052,7 @@ function isOidcProtocolMode(config) {
     return (config.authOptions.authority.options.protocolMode === ProtocolMode.OIDC);
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
-
-/*
- * Copyright (c) Microsoft Corporation. All rights reserved.
- * Licensed under the MIT License.
- */
-/**
- * Error thrown when there is an error with the server code, for example, unavailability.
- */
-class ServerError extends AuthError {
-    constructor(errorCode, errorMessage, subError, errorNo, status) {
-        super(errorCode, errorMessage, subError);
-        this.name = "ServerError";
-        this.errorNo = errorNo;
-        this.status = status;
-        Object.setPrototypeOf(this, ServerError.prototype);
-    }
-}
-
-/*! @azure/msal-common v14.15.0 2024-10-03 */
-
-/*
- * Copyright (c) Microsoft Corporation. All rights reserved.
- * Licensed under the MIT License.
- */
-/** @internal */
-class ThrottlingUtils {
-    /**
-     * Prepares a RequestThumbprint to be stored as a key.
-     * @param thumbprint
-     */
-    static generateThrottlingStorageKey(thumbprint) {
-        return `${ThrottlingConstants.THROTTLING_PREFIX}.${JSON.stringify(thumbprint)}`;
-    }
-    /**
-     * Performs necessary throttling checks before a network request.
-     * @param cacheManager
-     * @param thumbprint
-     */
-    static preProcess(cacheManager, thumbprint) {
-        const key = ThrottlingUtils.generateThrottlingStorageKey(thumbprint);
-        const value = cacheManager.getThrottlingCache(key);
-        if (value) {
-            if (value.throttleTime < Date.now()) {
-                cacheManager.removeItem(key);
-                return;
-            }
-            throw new ServerError(value.errorCodes?.join(" ") || Constants$1.EMPTY_STRING, value.errorMessage, value.subError);
-        }
-    }
-    /**
-     * Performs necessary throttling checks after a network request.
-     * @param cacheManager
-     * @param thumbprint
-     * @param response
-     */
-    static postProcess(cacheManager, thumbprint, response) {
-        if (ThrottlingUtils.checkResponseStatus(response) ||
-            ThrottlingUtils.checkResponseForRetryAfter(response)) {
-            const thumbprintValue = {
-                throttleTime: ThrottlingUtils.calculateThrottleTime(parseInt(response.headers[HeaderNames.RETRY_AFTER])),
-                error: response.body.error,
-                errorCodes: response.body.error_codes,
-                errorMessage: response.body.error_description,
-                subError: response.body.suberror,
-            };
-            cacheManager.setThrottlingCache(ThrottlingUtils.generateThrottlingStorageKey(thumbprint), thumbprintValue);
-        }
-    }
-    /**
-     * Checks a NetworkResponse object's status codes against 429 or 5xx
-     * @param response
-     */
-    static checkResponseStatus(response) {
-        return (response.status === 429 ||
-            (response.status >= 500 && response.status < 600));
-    }
-    /**
-     * Checks a NetworkResponse object's RetryAfter header
-     * @param response
-     */
-    static checkResponseForRetryAfter(response) {
-        if (response.headers) {
-            return (response.headers.hasOwnProperty(HeaderNames.RETRY_AFTER) &&
-                (response.status < 200 || response.status >= 300));
-        }
-        return false;
-    }
-    /**
-     * Calculates the Unix-time value for a throttle to expire given throttleTime in seconds.
-     * @param throttleTime
-     */
-    static calculateThrottleTime(throttleTime) {
-        const time = throttleTime <= 0 ? 0 : throttleTime;
-        const currentSeconds = Date.now() / 1000;
-        return Math.floor(Math.min(currentSeconds +
-            (time || ThrottlingConstants.DEFAULT_THROTTLE_TIME_SECONDS), currentSeconds +
-            ThrottlingConstants.DEFAULT_MAX_THROTTLE_TIME_SECONDS) * 1000);
-    }
-    static removeThrottle(cacheManager, clientId, request, homeAccountIdentifier) {
-        const thumbprint = {
-            clientId: clientId,
-            authority: request.authority,
-            scopes: request.scopes,
-            homeAccountIdentifier: homeAccountIdentifier,
-            claims: request.claims,
-            authenticationScheme: request.authenticationScheme,
-            resourceRequestMethod: request.resourceRequestMethod,
-            resourceRequestUri: request.resourceRequestUri,
-            shrClaims: request.shrClaims,
-            sshKid: request.sshKid,
-        };
-        const key = this.generateThrottlingStorageKey(thumbprint);
-        cacheManager.removeItem(key);
-    }
-}
-
-/*! @azure/msal-common v14.15.0 2024-10-03 */
-
-/*
- * Copyright (c) Microsoft Corporation. All rights reserved.
- * Licensed under the MIT License.
- */
-/** @internal */
-class NetworkManager {
-    constructor(networkClient, cacheManager) {
-        this.networkClient = networkClient;
-        this.cacheManager = cacheManager;
-    }
-    /**
-     * Wraps sendPostRequestAsync with necessary preflight and postflight logic
-     * @param thumbprint
-     * @param tokenEndpoint
-     * @param options
-     */
-    async sendPostRequest(thumbprint, tokenEndpoint, options) {
-        ThrottlingUtils.preProcess(this.cacheManager, thumbprint);
-        let response;
-        try {
-            response = await this.networkClient.sendPostRequestAsync(tokenEndpoint, options);
-        }
-        catch (e) {
-            if (e instanceof AuthError) {
-                throw e;
-            }
-            else {
-                throw createClientAuthError(networkError);
-            }
-        }
-        ThrottlingUtils.postProcess(this.cacheManager, thumbprint, response);
-        return response;
-    }
-}
-
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -56805,7 +57062,7 @@ const CcsCredentialType = {
     UPN: "UPN",
 };
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -56853,8 +57110,10 @@ const SID = "sid";
 const LOGIN_HINT = "login_hint";
 const DOMAIN_HINT = "domain_hint";
 const X_CLIENT_EXTRA_SKU = "x-client-xtra-sku";
+const BROKER_CLIENT_ID = "brk_client_id";
+const BROKER_REDIRECT_URI = "brk_redirect_uri";
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -56921,16 +57180,30 @@ class RequestValidator {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
  */
+function instrumentBrokerParams(parameters, correlationId, performanceClient) {
+    if (!correlationId) {
+        return;
+    }
+    const clientId = parameters.get(CLIENT_ID);
+    if (clientId && parameters.has(BROKER_CLIENT_ID)) {
+        performanceClient?.addFields({
+            embeddedClientId: clientId,
+            embeddedRedirectUri: parameters.get(REDIRECT_URI),
+        }, correlationId);
+    }
+}
 /** @internal */
 class RequestParameterBuilder {
-    constructor() {
+    constructor(correlationId, performanceClient) {
         this.parameters = new Map();
+        this.performanceClient = performanceClient;
+        this.correlationId = correlationId;
     }
     /**
      * add response_type = code
@@ -57294,6 +57567,14 @@ class RequestParameterBuilder {
     addLogoutHint(logoutHint) {
         this.parameters.set(LOGOUT_HINT, encodeURIComponent(logoutHint));
     }
+    addBrokerParameters(params) {
+        const brokerParams = {};
+        brokerParams[BROKER_CLIENT_ID] =
+            params.brokerClientId;
+        brokerParams[BROKER_REDIRECT_URI] =
+            params.brokerRedirectUri;
+        this.addExtraQueryParameters(brokerParams);
+    }
     /**
      * Utility to create a URL from the params map
      */
@@ -57302,11 +57583,12 @@ class RequestParameterBuilder {
         this.parameters.forEach((value, key) => {
             queryParameterArray.push(`${key}=${value}`);
         });
+        instrumentBrokerParams(this.parameters, this.correlationId, this.performanceClient);
         return queryParameterArray.join("&");
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -57318,7 +57600,7 @@ function isOpenIdConfigResponse(response) {
         response.hasOwnProperty("jwks_uri"));
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -57328,7 +57610,7 @@ function isCloudInstanceDiscoveryResponse(response) {
         response.hasOwnProperty("metadata"));
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -57338,7 +57620,7 @@ function isCloudInstanceDiscoveryErrorResponse(response) {
         response.hasOwnProperty("error_description"));
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -57440,6 +57722,7 @@ const PerformanceEvents = {
     /**
      * Time spent sending/waiting for the response of a request to the token endpoint
      */
+    NetworkClientSendPostRequestAsync: "networkClientSendPostRequestAsync",
     RefreshTokenClientExecutePostToTokenEndpoint: "refreshTokenClientExecutePostToTokenEndpoint",
     AuthorizationCodeClientExecutePostToTokenEndpoint: "authorizationCodeClientExecutePostToTokenEndpoint",
     /**
@@ -57582,7 +57865,7 @@ const PerformanceEvents = {
     GetRandomValues: "getRandomValues",
 };
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -57678,7 +57961,7 @@ const invokeAsync = (callback, eventName, logger, telemetryClient, correlationId
     };
 };
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -57787,7 +58070,7 @@ RegionDiscovery.IMDS_OPTIONS = {
     },
 };
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -58626,7 +58909,7 @@ function buildStaticAuthorityOptions(authOptions) {
     };
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -58657,7 +58940,144 @@ async function createDiscoveredInstance(authorityUri, networkClient, cacheManage
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
+
+/*
+ * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Licensed under the MIT License.
+ */
+/**
+ * Error thrown when there is an error with the server code, for example, unavailability.
+ */
+class ServerError extends AuthError {
+    constructor(errorCode, errorMessage, subError, errorNo, status) {
+        super(errorCode, errorMessage, subError);
+        this.name = "ServerError";
+        this.errorNo = errorNo;
+        this.status = status;
+        Object.setPrototypeOf(this, ServerError.prototype);
+    }
+}
+
+/*! @azure/msal-common v14.16.0 2024-11-19 */
+
+/*
+ * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Licensed under the MIT License.
+ */
+/** @internal */
+class ThrottlingUtils {
+    /**
+     * Prepares a RequestThumbprint to be stored as a key.
+     * @param thumbprint
+     */
+    static generateThrottlingStorageKey(thumbprint) {
+        return `${ThrottlingConstants.THROTTLING_PREFIX}.${JSON.stringify(thumbprint)}`;
+    }
+    /**
+     * Performs necessary throttling checks before a network request.
+     * @param cacheManager
+     * @param thumbprint
+     */
+    static preProcess(cacheManager, thumbprint) {
+        const key = ThrottlingUtils.generateThrottlingStorageKey(thumbprint);
+        const value = cacheManager.getThrottlingCache(key);
+        if (value) {
+            if (value.throttleTime < Date.now()) {
+                cacheManager.removeItem(key);
+                return;
+            }
+            throw new ServerError(value.errorCodes?.join(" ") || Constants$1.EMPTY_STRING, value.errorMessage, value.subError);
+        }
+    }
+    /**
+     * Performs necessary throttling checks after a network request.
+     * @param cacheManager
+     * @param thumbprint
+     * @param response
+     */
+    static postProcess(cacheManager, thumbprint, response) {
+        if (ThrottlingUtils.checkResponseStatus(response) ||
+            ThrottlingUtils.checkResponseForRetryAfter(response)) {
+            const thumbprintValue = {
+                throttleTime: ThrottlingUtils.calculateThrottleTime(parseInt(response.headers[HeaderNames.RETRY_AFTER])),
+                error: response.body.error,
+                errorCodes: response.body.error_codes,
+                errorMessage: response.body.error_description,
+                subError: response.body.suberror,
+            };
+            cacheManager.setThrottlingCache(ThrottlingUtils.generateThrottlingStorageKey(thumbprint), thumbprintValue);
+        }
+    }
+    /**
+     * Checks a NetworkResponse object's status codes against 429 or 5xx
+     * @param response
+     */
+    static checkResponseStatus(response) {
+        return (response.status === 429 ||
+            (response.status >= 500 && response.status < 600));
+    }
+    /**
+     * Checks a NetworkResponse object's RetryAfter header
+     * @param response
+     */
+    static checkResponseForRetryAfter(response) {
+        if (response.headers) {
+            return (response.headers.hasOwnProperty(HeaderNames.RETRY_AFTER) &&
+                (response.status < 200 || response.status >= 300));
+        }
+        return false;
+    }
+    /**
+     * Calculates the Unix-time value for a throttle to expire given throttleTime in seconds.
+     * @param throttleTime
+     */
+    static calculateThrottleTime(throttleTime) {
+        const time = throttleTime <= 0 ? 0 : throttleTime;
+        const currentSeconds = Date.now() / 1000;
+        return Math.floor(Math.min(currentSeconds +
+            (time || ThrottlingConstants.DEFAULT_THROTTLE_TIME_SECONDS), currentSeconds +
+            ThrottlingConstants.DEFAULT_MAX_THROTTLE_TIME_SECONDS) * 1000);
+    }
+    static removeThrottle(cacheManager, clientId, request, homeAccountIdentifier) {
+        const thumbprint = {
+            clientId: clientId,
+            authority: request.authority,
+            scopes: request.scopes,
+            homeAccountIdentifier: homeAccountIdentifier,
+            claims: request.claims,
+            authenticationScheme: request.authenticationScheme,
+            resourceRequestMethod: request.resourceRequestMethod,
+            resourceRequestUri: request.resourceRequestUri,
+            shrClaims: request.shrClaims,
+            sshKid: request.sshKid,
+        };
+        const key = this.generateThrottlingStorageKey(thumbprint);
+        cacheManager.removeItem(key);
+    }
+}
+
+/*! @azure/msal-common v14.16.0 2024-11-19 */
+
+/*
+ * Copyright (c) Microsoft Corporation. All rights reserved.
+ * Licensed under the MIT License.
+ */
+/**
+ * Represents network related errors
+ */
+class NetworkError extends AuthError {
+    constructor(error, httpStatus, responseHeaders) {
+        super(error.errorCode, error.errorMessage, error.subError);
+        Object.setPrototypeOf(this, NetworkError.prototype);
+        this.name = "NetworkError";
+        this.error = error;
+        this.httpStatus = httpStatus;
+        this.responseHeaders = responseHeaders;
+    }
+}
+
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -58679,8 +59099,6 @@ class BaseClient {
         this.cacheManager = this.config.storageInterface;
         // Set the network interface
         this.networkClient = this.config.networkInterface;
-        // Set the NetworkManager
-        this.networkManager = new NetworkManager(this.networkClient, this.cacheManager);
         // Set TelemetryManager
         this.serverTelemetryManager = this.config.serverTelemetryManager;
         // set Authority
@@ -58724,17 +59142,59 @@ class BaseClient {
         if (queuedEvent) {
             this.performanceClient?.addQueueMeasurement(queuedEvent, correlationId);
         }
-        const response = await this.networkManager.sendPostRequest(thumbprint, tokenEndpoint, { body: queryString, headers: headers });
-        this.performanceClient?.addFields({
-            refreshTokenSize: response.body.refresh_token?.length || 0,
-            httpVerToken: response.headers?.[HeaderNames.X_MS_HTTP_VERSION] || "",
-        }, correlationId);
+        const response = await this.sendPostRequest(thumbprint, tokenEndpoint, { body: queryString, headers: headers }, correlationId);
         if (this.config.serverTelemetryManager &&
             response.status < 500 &&
             response.status !== 429) {
             // Telemetry data successfully logged by server, clear Telemetry cache
             this.config.serverTelemetryManager.clearTelemetryCache();
         }
+        return response;
+    }
+    /**
+     * Wraps sendPostRequestAsync with necessary preflight and postflight logic
+     * @param thumbprint - Request thumbprint for throttling
+     * @param tokenEndpoint - Endpoint to make the POST to
+     * @param options - Body and Headers to include on the POST request
+     * @param correlationId - CorrelationId for telemetry
+     */
+    async sendPostRequest(thumbprint, tokenEndpoint, options, correlationId) {
+        ThrottlingUtils.preProcess(this.cacheManager, thumbprint);
+        let response;
+        try {
+            response = await invokeAsync((this.networkClient.sendPostRequestAsync.bind(this.networkClient)), PerformanceEvents.NetworkClientSendPostRequestAsync, this.logger, this.performanceClient, correlationId)(tokenEndpoint, options);
+            const responseHeaders = response.headers || {};
+            this.performanceClient?.addFields({
+                refreshTokenSize: response.body.refresh_token?.length || 0,
+                httpVerToken: responseHeaders[HeaderNames.X_MS_HTTP_VERSION] || "",
+                requestId: responseHeaders[HeaderNames.X_MS_REQUEST_ID] || "",
+            }, correlationId);
+        }
+        catch (e) {
+            if (e instanceof NetworkError) {
+                const responseHeaders = e.responseHeaders;
+                if (responseHeaders) {
+                    this.performanceClient?.addFields({
+                        httpVerToken: responseHeaders[HeaderNames.X_MS_HTTP_VERSION] || "",
+                        requestId: responseHeaders[HeaderNames.X_MS_REQUEST_ID] ||
+                            "",
+                        contentTypeHeader: responseHeaders[HeaderNames.CONTENT_TYPE] ||
+                            undefined,
+                        contentLengthHeader: responseHeaders[HeaderNames.CONTENT_LENGTH] ||
+                            undefined,
+                        httpStatus: e.httpStatus,
+                    }, correlationId);
+                }
+                throw e.error;
+            }
+            if (e instanceof AuthError) {
+                throw e;
+            }
+            else {
+                throw createClientAuthError(networkError);
+            }
+        }
+        ThrottlingUtils.postProcess(this.cacheManager, thumbprint, response);
         return response;
     }
     /**
@@ -58752,15 +59212,22 @@ class BaseClient {
      * @param request
      */
     createTokenQueryParameters(request) {
-        const parameterBuilder = new RequestParameterBuilder();
+        const parameterBuilder = new RequestParameterBuilder(request.correlationId, this.performanceClient);
+        if (request.embeddedClientId) {
+            parameterBuilder.addBrokerParameters({
+                brokerClientId: this.config.authOptions.clientId,
+                brokerRedirectUri: this.config.authOptions.redirectUri,
+            });
+        }
         if (request.tokenQueryParameters) {
             parameterBuilder.addExtraQueryParameters(request.tokenQueryParameters);
         }
+        parameterBuilder.addCorrelationId(request.correlationId);
         return parameterBuilder.createQueryString();
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -58786,7 +59253,7 @@ var InteractionRequiredAuthErrorCodes = /*#__PURE__*/Object.freeze({
     refreshTokenExpired: refreshTokenExpired
 });
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -58874,7 +59341,7 @@ function createInteractionRequiredAuthError(errorCode) {
     return new InteractionRequiredAuthError(errorCode, InteractionRequiredAuthErrorMessages[errorCode]);
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -58946,7 +59413,7 @@ class ProtocolUtils {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -59030,7 +59497,7 @@ class PopTokenGenerator {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -59057,7 +59524,7 @@ class PopTokenGenerator {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -59434,7 +59901,7 @@ function buildAccountToCache(cacheStorage, authority, homeAccountId, base64Decod
     return baseAccount;
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
@@ -59452,7 +59919,7 @@ async function getClientAssertion(clientAssertion, clientId, tokenEndpoint) {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -59578,8 +60045,9 @@ class AuthorizationCodeClient extends BaseClient {
      */
     async createTokenRequestBody(request) {
         this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthClientCreateTokenRequestBody, request.correlationId);
-        const parameterBuilder = new RequestParameterBuilder();
-        parameterBuilder.addClientId(request.tokenBodyParameters?.[CLIENT_ID] ||
+        const parameterBuilder = new RequestParameterBuilder(request.correlationId, this.performanceClient);
+        parameterBuilder.addClientId(request.embeddedClientId ||
+            request.tokenBodyParameters?.[CLIENT_ID] ||
             this.config.authOptions.clientId);
         /*
          * For hybrid spa flow, there will be a code but no verifier
@@ -59639,9 +60107,6 @@ class AuthorizationCodeClient extends BaseClient {
                 throw createClientConfigurationError(missingSshJwk);
             }
         }
-        const correlationId = request.correlationId ||
-            this.config.cryptoInterface.createNewGuid();
-        parameterBuilder.addCorrelationId(correlationId);
         if (!StringUtils.isEmptyObj(request.claims) ||
             (this.config.authOptions.clientCapabilities &&
                 this.config.authOptions.clientCapabilities.length > 0)) {
@@ -59681,6 +60146,12 @@ class AuthorizationCodeClient extends BaseClient {
                     break;
             }
         }
+        if (request.embeddedClientId) {
+            parameterBuilder.addBrokerParameters({
+                brokerClientId: this.config.authOptions.clientId,
+                brokerRedirectUri: this.config.authOptions.redirectUri,
+            });
+        }
         if (request.tokenBodyParameters) {
             parameterBuilder.addExtraQueryParameters(request.tokenBodyParameters);
         }
@@ -59699,9 +60170,13 @@ class AuthorizationCodeClient extends BaseClient {
      * @param request
      */
     async createAuthCodeUrlQueryString(request) {
-        this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthClientCreateQueryString, request.correlationId);
-        const parameterBuilder = new RequestParameterBuilder();
-        parameterBuilder.addClientId(request.extraQueryParameters?.[CLIENT_ID] ||
+        // generate the correlationId if not set by the user and add
+        const correlationId = request.correlationId ||
+            this.config.cryptoInterface.createNewGuid();
+        this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthClientCreateQueryString, correlationId);
+        const parameterBuilder = new RequestParameterBuilder(correlationId, this.performanceClient);
+        parameterBuilder.addClientId(request.embeddedClientId ||
+            request.extraQueryParameters?.[CLIENT_ID] ||
             this.config.authOptions.clientId);
         const requestScopes = [
             ...(request.scopes || []),
@@ -59710,9 +60185,6 @@ class AuthorizationCodeClient extends BaseClient {
         parameterBuilder.addScopes(requestScopes, true, this.oidcDefaultScopes);
         // validate the redirectUri (to be a non null value)
         parameterBuilder.addRedirectUri(request.redirectUri);
-        // generate the correlationId if not set by the user and add
-        const correlationId = request.correlationId ||
-            this.config.cryptoInterface.createNewGuid();
         parameterBuilder.addCorrelationId(correlationId);
         // add response_mode. If not passed in it defaults to query.
         parameterBuilder.addResponseMode(request.responseMode);
@@ -59814,6 +60286,12 @@ class AuthorizationCodeClient extends BaseClient {
                 this.config.authOptions.clientCapabilities.length > 0)) {
             parameterBuilder.addClaims(request.claims, this.config.authOptions.clientCapabilities);
         }
+        if (request.embeddedClientId) {
+            parameterBuilder.addBrokerParameters({
+                brokerClientId: this.config.authOptions.clientId,
+                brokerRedirectUri: this.config.authOptions.redirectUri,
+            });
+        }
         this.addExtraQueryParams(request, parameterBuilder);
         if (request.nativeBroker) {
             // signal ests that this is a WAM call
@@ -59840,7 +60318,7 @@ class AuthorizationCodeClient extends BaseClient {
      * @param request
      */
     createLogoutUrlQueryString(request) {
-        const parameterBuilder = new RequestParameterBuilder();
+        const parameterBuilder = new RequestParameterBuilder(request.correlationId, this.performanceClient);
         if (request.postLogoutRedirectUri) {
             parameterBuilder.addPostLogoutRedirectUri(request.postLogoutRedirectUri);
         }
@@ -59883,7 +60361,7 @@ class AuthorizationCodeClient extends BaseClient {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -60021,8 +60499,9 @@ class RefreshTokenClient extends BaseClient {
     async createTokenRequestBody(request) {
         this.performanceClient?.addQueueMeasurement(PerformanceEvents.RefreshTokenClientCreateTokenRequestBody, request.correlationId);
         const correlationId = request.correlationId;
-        const parameterBuilder = new RequestParameterBuilder();
-        parameterBuilder.addClientId(request.tokenBodyParameters?.[CLIENT_ID] ||
+        const parameterBuilder = new RequestParameterBuilder(correlationId, this.performanceClient);
+        parameterBuilder.addClientId(request.embeddedClientId ||
+            request.tokenBodyParameters?.[CLIENT_ID] ||
             this.config.authOptions.clientId);
         if (request.redirectUri) {
             parameterBuilder.addRedirectUri(request.redirectUri);
@@ -60036,7 +60515,6 @@ class RefreshTokenClient extends BaseClient {
         if (this.serverTelemetryManager && !isOidcProtocolMode(this.config)) {
             parameterBuilder.addServerTelemetry(this.serverTelemetryManager);
         }
-        parameterBuilder.addCorrelationId(correlationId);
         parameterBuilder.addRefreshToken(request.refreshToken);
         if (this.config.clientCredentials.clientSecret) {
             parameterBuilder.addClientSecret(this.config.clientCredentials.clientSecret);
@@ -60090,6 +60568,12 @@ class RefreshTokenClient extends BaseClient {
                     break;
             }
         }
+        if (request.embeddedClientId) {
+            parameterBuilder.addBrokerParameters({
+                brokerClientId: this.config.authOptions.clientId,
+                brokerRedirectUri: this.config.authOptions.redirectUri,
+            });
+        }
         if (request.tokenBodyParameters) {
             parameterBuilder.addExtraQueryParameters(request.tokenBodyParameters);
         }
@@ -60097,7 +60581,7 @@ class RefreshTokenClient extends BaseClient {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -60233,7 +60717,7 @@ class SilentFlowClient extends BaseClient {
     }
 }
 
-/*! @azure/msal-common v14.15.0 2024-10-03 */
+/*! @azure/msal-common v14.16.0 2024-11-19 */
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -60501,12 +60985,13 @@ class ServerTelemetryManager {
  * Licensed under the MIT License.
  */
 /**
- * This class deserializes cache entities read from the file into in memory object types defined internally
+ * This class deserializes cache entities read from the file into in-memory object types defined internally
+ * @internal
  */
 class Deserializer {
     /**
      * Parse the JSON blob in memory and deserialize the content
-     * @param cachedJson
+     * @param cachedJson - JSON blob cache
      */
     static deserializeJSONBlob(jsonFile) {
         const deserializedCache = !jsonFile ? {} : JSON.parse(jsonFile);
@@ -60514,7 +60999,7 @@ class Deserializer {
     }
     /**
      * Deserializes accounts to AccountEntity objects
-     * @param accounts
+     * @param accounts - accounts of type SerializedAccountEntity
      */
     static deserializeAccounts(accounts) {
         const accountObjects = {};
@@ -60545,7 +61030,7 @@ class Deserializer {
     }
     /**
      * Deserializes id tokens to IdTokenEntity objects
-     * @param idTokens
+     * @param idTokens - credentials of type SerializedIdTokenEntity
      */
     static deserializeIdTokens(idTokens) {
         const idObjects = {};
@@ -60567,7 +61052,7 @@ class Deserializer {
     }
     /**
      * Deserializes access tokens to AccessTokenEntity objects
-     * @param accessTokens
+     * @param accessTokens - access tokens of type SerializedAccessTokenEntity
      */
     static deserializeAccessTokens(accessTokens) {
         const atObjects = {};
@@ -60599,7 +61084,7 @@ class Deserializer {
     }
     /**
      * Deserializes refresh tokens to RefreshTokenEntity objects
-     * @param refreshTokens
+     * @param refreshTokens - refresh tokens of type SerializedRefreshTokenEntity
      */
     static deserializeRefreshTokens(refreshTokens) {
         const rtObjects = {};
@@ -60623,7 +61108,7 @@ class Deserializer {
     }
     /**
      * Deserializes appMetadata to AppMetaData objects
-     * @param appMetadata
+     * @param appMetadata - app metadata of type SerializedAppMetadataEntity
      */
     static deserializeAppMetadata(appMetadata) {
         const appMetadataObjects = {};
@@ -60641,7 +61126,7 @@ class Deserializer {
     }
     /**
      * Deserialize an inMemory Cache
-     * @param jsonCache
+     * @param jsonCache - JSON blob cache
      */
     static deserializeAllCache(jsonCache) {
         return {
@@ -60742,6 +61227,7 @@ const ProxyStatus = {
  * Constants used for region discovery
  */
 const REGION_ENVIRONMENT_VARIABLE = "REGION_NAME";
+const MSAL_FORCE_REGION = "MSAL_FORCE_REGION";
 /**
  * Constant used for PKCE
  */
@@ -61688,7 +62174,7 @@ class CryptoProvider {
     }
     /**
      * Stringifies and base64Url encodes input public key
-     * @param inputKid
+     * @param inputKid - public key id
      * @returns Base64Url encoded public key
      */
     encodeKid() {
@@ -61729,7 +62215,7 @@ class CryptoProvider {
     }
     /**
      * Removes cryptographic keypair from key store matching the keyId passed in
-     * @param kid
+     * @param kid - public key id
      */
     removeTokenBindingKey() {
         throw new Error("Method not implemented.");
@@ -61925,7 +62411,7 @@ class NodeStorage extends CacheManager {
     }
     /**
      * Reads account from cache, builds it into an account entity and returns it.
-     * @param accountKey
+     * @param accountKey - lookup key to fetch cache type AccountEntity
      * @returns
      */
     getCachedAccountEntity(accountKey) {
@@ -62109,7 +62595,7 @@ class NodeStorage extends CacheManager {
     }
     /**
      * Remove account entity from the platform cache if it's outdated
-     * @param accountKey
+     * @param accountKey - lookup key to fetch cache type AccountEntity
      */
     removeOutdatedAccount(accountKey) {
         this.removeItem(accountKey);
@@ -62133,7 +62619,7 @@ class NodeStorage extends CacheManager {
     /**
      * Clears all cache entries created by MSAL (except tokens).
      */
-    async clear() {
+    clear() {
         this.logger.trace("Clearing cache entries created by MSAL");
         // read inMemoryCache
         const cacheKeys = this.getKeys();
@@ -62256,7 +62742,7 @@ class TokenCache {
         let cacheContext;
         try {
             if (this.persistence) {
-                cacheContext = new TokenCacheContext(this, true);
+                cacheContext = new TokenCacheContext(this, false);
                 await this.persistence.beforeCacheAccess(cacheContext);
             }
             return this.storage.getAllAccounts();
@@ -62590,7 +63076,7 @@ class ClientAssertion {
 
 /* eslint-disable header/header */
 const name = "@azure/msal-node";
-const version = "2.15.0";
+const version = "2.16.2";
 
 /*
  * Copyright (c) Microsoft Corporation. All rights reserved.
@@ -62599,6 +63085,7 @@ const version = "2.15.0";
 /**
  * Oauth2.0 Password grant client
  * Note: We are only supporting public clients for password grant and for purely testing purposes
+ * @public
  */
 class UsernamePasswordClient extends BaseClient {
     constructor(configuration) {
@@ -62607,7 +63094,7 @@ class UsernamePasswordClient extends BaseClient {
     /**
      * API to acquire a token by passing the username and password to the service in exchage of credentials
      * password_grant
-     * @param request
+     * @param request - CommonUsernamePasswordRequest
      */
     async acquireToken(request) {
         this.logger.info("in acquireToken call in username-password client");
@@ -62621,8 +63108,8 @@ class UsernamePasswordClient extends BaseClient {
     }
     /**
      * Executes POST request to token endpoint
-     * @param authority
-     * @param request
+     * @param authority - authority object
+     * @param request - CommonUsernamePasswordRequest provided by the developer
      */
     async executeTokenRequest(authority, request) {
         const queryParametersString = this.createTokenQueryParameters(request);
@@ -62647,7 +63134,7 @@ class UsernamePasswordClient extends BaseClient {
     }
     /**
      * Generates a map for all the params to be sent to the service
-     * @param request
+     * @param request - CommonUsernamePasswordRequest provided by the developer
      */
     async createTokenRequestBody(request) {
         const parameterBuilder = new RequestParameterBuilder();
@@ -62724,7 +63211,7 @@ class ClientApplication {
             responseMode: request.responseMode || ResponseMode.QUERY,
             authenticationScheme: AuthenticationScheme.BEARER,
         };
-        const authClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, undefined, undefined, request.azureCloudOptions);
+        const authClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, validRequest.redirectUri, undefined, undefined, request.azureCloudOptions);
         const authorizationCodeClient = new AuthorizationCodeClient(authClientConfig);
         this.logger.verbose("Auth code client created", validRequest.correlationId);
         return authorizationCodeClient.getAuthCodeUrl(validRequest);
@@ -62752,7 +63239,7 @@ class ClientApplication {
         };
         const serverTelemetryManager = this.initializeServerTelemetryManager(ApiId.acquireTokenByCode, validRequest.correlationId);
         try {
-            const authClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, serverTelemetryManager, undefined, request.azureCloudOptions);
+            const authClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, validRequest.redirectUri, serverTelemetryManager, undefined, request.azureCloudOptions);
             const authorizationCodeClient = new AuthorizationCodeClient(authClientConfig);
             this.logger.verbose("Auth code client created", validRequest.correlationId);
             return await authorizationCodeClient.acquireToken(validRequest, authCodePayLoad);
@@ -62781,7 +63268,7 @@ class ClientApplication {
         };
         const serverTelemetryManager = this.initializeServerTelemetryManager(ApiId.acquireTokenByRefreshToken, validRequest.correlationId);
         try {
-            const refreshTokenClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, serverTelemetryManager, undefined, request.azureCloudOptions);
+            const refreshTokenClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, validRequest.redirectUri || "", serverTelemetryManager, undefined, request.azureCloudOptions);
             const refreshTokenClient = new RefreshTokenClient(refreshTokenClientConfig);
             this.logger.verbose("Refresh token client created", validRequest.correlationId);
             return await refreshTokenClient.acquireToken(validRequest);
@@ -62810,7 +63297,7 @@ class ClientApplication {
         };
         const serverTelemetryManager = this.initializeServerTelemetryManager(ApiId.acquireTokenSilent, validRequest.correlationId, validRequest.forceRefresh);
         try {
-            const silentFlowClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, serverTelemetryManager, undefined, request.azureCloudOptions);
+            const silentFlowClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, validRequest.redirectUri || "", serverTelemetryManager, undefined, request.azureCloudOptions);
             const silentFlowClient = new SilentFlowClient(silentFlowClientConfig);
             this.logger.verbose("Silent flow client created", validRequest.correlationId);
             return await silentFlowClient.acquireToken(validRequest);
@@ -62841,7 +63328,7 @@ class ClientApplication {
         };
         const serverTelemetryManager = this.initializeServerTelemetryManager(ApiId.acquireTokenByUsernamePassword, validRequest.correlationId);
         try {
-            const usernamePasswordClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, serverTelemetryManager, undefined, request.azureCloudOptions);
+            const usernamePasswordClientConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, "", serverTelemetryManager, undefined, request.azureCloudOptions);
             const usernamePasswordClient = new UsernamePasswordClient(usernamePasswordClientConfig);
             this.logger.verbose("Username password client created", validRequest.correlationId);
             return await usernamePasswordClient.acquireToken(validRequest);
@@ -62867,8 +63354,8 @@ class ClientApplication {
      * This API is provided for scenarios where you would use OAuth2.0 state parameter to mitigate against
      * CSRF attacks.
      * For more information about state, visit https://datatracker.ietf.org/doc/html/rfc6819#section-3.6.
-     * @param state
-     * @param cachedState
+     * @param state - Unique GUID generated by the user that is cached by the user and sent to the server during the first leg of the flow
+     * @param cachedState - This string is sent back by the server with the authorization code
      */
     validateState(state, cachedState) {
         if (!state) {
@@ -62896,7 +63383,7 @@ class ClientApplication {
      * @param authority - user passed authority in configuration
      * @param serverTelemetryManager - initializes servertelemetry if passed
      */
-    async buildOauthClientConfiguration(authority, requestCorrelationId, serverTelemetryManager, azureRegionConfiguration, azureCloudOptions) {
+    async buildOauthClientConfiguration(authority, requestCorrelationId, redirectUri, serverTelemetryManager, azureRegionConfiguration, azureCloudOptions) {
         this.logger.verbose("buildOauthClientConfiguration called", requestCorrelationId);
         // precedence - azureCloudInstance + tenant >> authority and request  >> config
         const userAzureCloudOptions = azureCloudOptions
@@ -62911,6 +63398,7 @@ class ClientApplication {
                 clientId: this.config.auth.clientId,
                 authority: discoveredAuthority,
                 clientCapabilities: this.config.auth.clientCapabilities,
+                redirectUri,
             },
             loggerOptions: {
                 logLevel: this.config.system.loggerOptions.logLevel,
@@ -63019,7 +63507,7 @@ class ClientApplication {
      * Clear the cache
      */
     clearCache() {
-        void this.storage.clear();
+        this.storage.clear();
     }
 }
 
@@ -63111,6 +63599,7 @@ class LoopbackClient {
  */
 /**
  * OAuth2.0 Device code client
+ * @public
  */
 class DeviceCodeClient extends BaseClient {
     constructor(configuration) {
@@ -63119,7 +63608,7 @@ class DeviceCodeClient extends BaseClient {
     /**
      * Gets device code from device code endpoint, calls back to with device code response, and
      * polls token endpoint to exchange device code for tokens
-     * @param request
+     * @param request - developer provided CommonDeviceCodeRequest
      */
     async acquireToken(request) {
         const deviceCodeResponse = await this.getDeviceCode(request);
@@ -63133,7 +63622,7 @@ class DeviceCodeClient extends BaseClient {
     }
     /**
      * Creates device code request and executes http GET
-     * @param request
+     * @param request - developer provided CommonDeviceCodeRequest
      */
     async getDeviceCode(request) {
         const queryParametersString = this.createExtraQueryParameters(request);
@@ -63151,11 +63640,11 @@ class DeviceCodeClient extends BaseClient {
             shrClaims: request.shrClaims,
             sshKid: request.sshKid,
         };
-        return this.executePostRequestToDeviceCodeEndpoint(endpoint, queryString, headers, thumbprint);
+        return this.executePostRequestToDeviceCodeEndpoint(endpoint, queryString, headers, thumbprint, request.correlationId);
     }
     /**
      * Creates query string for the device code request
-     * @param request
+     * @param request - developer provided CommonDeviceCodeRequest
      */
     createExtraQueryParameters(request) {
         const parameterBuilder = new RequestParameterBuilder();
@@ -63166,15 +63655,17 @@ class DeviceCodeClient extends BaseClient {
     }
     /**
      * Executes POST request to device code endpoint
-     * @param deviceCodeEndpoint
-     * @param queryString
-     * @param headers
+     * @param deviceCodeEndpoint - token endpoint
+     * @param queryString - string to be used in the body of the request
+     * @param headers - headers for the request
+     * @param thumbprint - unique request thumbprint
+     * @param correlationId - correlation id to be used in the request
      */
-    async executePostRequestToDeviceCodeEndpoint(deviceCodeEndpoint, queryString, headers, thumbprint) {
-        const { body: { user_code: userCode, device_code: deviceCode, verification_uri: verificationUri, expires_in: expiresIn, interval, message, }, } = await this.networkManager.sendPostRequest(thumbprint, deviceCodeEndpoint, {
+    async executePostRequestToDeviceCodeEndpoint(deviceCodeEndpoint, queryString, headers, thumbprint, correlationId) {
+        const { body: { user_code: userCode, device_code: deviceCode, verification_uri: verificationUri, expires_in: expiresIn, interval, message, }, } = await this.sendPostRequest(thumbprint, deviceCodeEndpoint, {
             body: queryString,
             headers: headers,
-        });
+        }, correlationId);
         return {
             userCode,
             deviceCode,
@@ -63186,6 +63677,7 @@ class DeviceCodeClient extends BaseClient {
     }
     /**
      * Create device code endpoint query parameters and returns string
+     * @param request - developer provided CommonDeviceCodeRequest
      */
     createQueryString(request) {
         const parameterBuilder = new RequestParameterBuilder();
@@ -63202,9 +63694,10 @@ class DeviceCodeClient extends BaseClient {
         return parameterBuilder.createQueryString();
     }
     /**
-     * Breaks the polling with specific conditions.
-     * @param request CommonDeviceCodeRequest
-     * @param deviceCodeResponse DeviceCodeResponse
+     * Breaks the polling with specific conditions
+     * @param deviceCodeExpirationTime - expiration time for the device code request
+     * @param userSpecifiedTimeout - developer provided timeout, to be compared against deviceCodeExpirationTime
+     * @param userSpecifiedCancelFlag - boolean indicating the developer would like to cancel the request
      */
     continuePolling(deviceCodeExpirationTime, userSpecifiedTimeout, userSpecifiedCancelFlag) {
         if (userSpecifiedCancelFlag) {
@@ -63227,10 +63720,9 @@ class DeviceCodeClient extends BaseClient {
         return true;
     }
     /**
-     * Creates token request with device code response and polls token endpoint at interval set by the device code
-     * response
-     * @param request
-     * @param deviceCodeResponse
+     * Creates token request with device code response and polls token endpoint at interval set by the device code response
+     * @param request - developer provided CommonDeviceCodeRequest
+     * @param deviceCodeResponse - DeviceCodeResponse returned by the security token service device code endpoint
      */
     async acquireTokenWithDeviceCode(request, deviceCodeResponse) {
         const queryParametersString = this.createTokenQueryParameters(request);
@@ -63285,8 +63777,8 @@ class DeviceCodeClient extends BaseClient {
     }
     /**
      * Creates query parameters and converts to string.
-     * @param request
-     * @param deviceCodeResponse
+     * @param request - developer provided CommonDeviceCodeRequest
+     * @param deviceCodeResponse - DeviceCodeResponse returned by the security token service device code endpoint
      */
     createTokenRequestBody(request, deviceCodeResponse) {
         const requestParameters = new RequestParameterBuilder();
@@ -63370,7 +63862,7 @@ class PublicClientApplication extends ClientApplication {
         const validRequest = Object.assign(request, await this.initializeBaseRequest(request));
         const serverTelemetryManager = this.initializeServerTelemetryManager(ApiId.acquireTokenByDeviceCode, validRequest.correlationId);
         try {
-            const deviceCodeConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, serverTelemetryManager, undefined, request.azureCloudOptions);
+            const deviceCodeConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, "", serverTelemetryManager, undefined, request.azureCloudOptions);
             const deviceCodeClient = new DeviceCodeClient(deviceCodeConfig);
             this.logger.verbose("Device code client created", validRequest.correlationId);
             return await deviceCodeClient.acquireToken(validRequest);
@@ -63459,7 +63951,7 @@ class PublicClientApplication extends ClientApplication {
     }
     /**
      * Returns a token retrieved either from the cache or by exchanging the refresh token for a fresh access token. If brokering is enabled the token request will be serviced by the broker.
-     * @param request
+     * @param request - developer provided SilentFlowRequest
      * @returns
      */
     async acquireTokenSilent(request) {
@@ -63486,7 +63978,7 @@ class PublicClientApplication extends ClientApplication {
     }
     /**
      * Removes cache artifacts associated with the given account
-     * @param request
+     * @param request - developer provided SignOutRequest
      * @returns
      */
     async signOut(request) {
@@ -63514,7 +64006,7 @@ class PublicClientApplication extends ClientApplication {
     }
     /**
      * Attempts to retrieve the redirectUri from the loopback server. If the loopback server does not start listening for requests within the timeout this will throw.
-     * @param loopbackClient
+     * @param loopbackClient - developer provided custom loopback server implementation
      * @returns
      */
     async waitForRedirectUri(loopbackClient) {
@@ -63557,6 +64049,7 @@ class PublicClientApplication extends ClientApplication {
  */
 /**
  * OAuth2.0 client credential grant
+ * @public
  */
 class ClientCredentialClient extends BaseClient {
     constructor(configuration, appTokenProvider) {
@@ -63565,7 +64058,7 @@ class ClientCredentialClient extends BaseClient {
     }
     /**
      * Public API to acquire a token with ClientCredential Flow for Confidential clients
-     * @param request
+     * @param request - CommonClientCredentialRequest provided by the developer
      */
     async acquireToken(request) {
         if (request.skipCache || request.claims) {
@@ -63659,8 +64152,8 @@ class ClientCredentialClient extends BaseClient {
     }
     /**
      * Makes a network call to request the token from the service
-     * @param request
-     * @param authority
+     * @param request - CommonClientCredentialRequest provided by the developer
+     * @param authority - authority object
      */
     async executeTokenRequest(request, authority, refreshAccessToken) {
         let serverTokenResponse;
@@ -63711,7 +64204,7 @@ class ClientCredentialClient extends BaseClient {
     }
     /**
      * generate the request to the server in the acceptable format
-     * @param request
+     * @param request - CommonClientCredentialRequest provided by the developer
      */
     async createTokenRequestBody(request) {
         const parameterBuilder = new RequestParameterBuilder();
@@ -63752,6 +64245,7 @@ class ClientCredentialClient extends BaseClient {
  */
 /**
  * On-Behalf-Of client
+ * @public
  */
 class OnBehalfOfClient extends BaseClient {
     constructor(configuration) {
@@ -63759,7 +64253,7 @@ class OnBehalfOfClient extends BaseClient {
     }
     /**
      * Public API to acquire tokens with on behalf of flow
-     * @param request
+     * @param request - developer provided CommonOnBehalfOfRequest
      */
     async acquireToken(request) {
         this.scopeSet = new ScopeSet(request.scopes || []);
@@ -63782,7 +64276,7 @@ class OnBehalfOfClient extends BaseClient {
      * Find accessToken based on user assertion and account info in the cache
      * Please note we are not yet supported OBO tokens refreshed with long lived RT. User will have to send a new assertion if the current access token expires
      * This is to prevent security issues when the assertion changes over time, however, longlived RT helps retaining the session
-     * @param request
+     * @param request - developer provided CommonOnBehalfOfRequest
      */
     async getCachedAuthenticationResult(request) {
         // look in the cache for the access_token which matches the incoming_assertion
@@ -63830,7 +64324,7 @@ class OnBehalfOfClient extends BaseClient {
     /**
      * read idtoken from cache, this is a specific implementation for OBO as the requirements differ from a generic lookup in the cacheManager
      * Certain use cases of OBO flow do not expect an idToken in the cache/or from the service
-     * @param atHomeAccountId {string}
+     * @param atHomeAccountId - account id
      */
     readIdTokenFromCacheForOBO(atHomeAccountId) {
         const idTokenFilter = {
@@ -63849,9 +64343,8 @@ class OnBehalfOfClient extends BaseClient {
     }
     /**
      * Fetches the cached access token based on incoming assertion
-     * @param clientId
-     * @param request
-     * @param userAssertionHash
+     * @param clientId - client id
+     * @param request - developer provided CommonOnBehalfOfRequest
      */
     readAccessTokenFromCacheForOBO(clientId, request) {
         const authScheme = request.authenticationScheme || AuthenticationScheme.BEARER;
@@ -63885,8 +64378,8 @@ class OnBehalfOfClient extends BaseClient {
     }
     /**
      * Make a network call to the server requesting credentials
-     * @param request
-     * @param authority
+     * @param request - developer provided CommonOnBehalfOfRequest
+     * @param authority - authority object
      */
     async executeTokenRequest(request, authority, userAssertionHash) {
         const queryParametersString = this.createTokenQueryParameters(request);
@@ -63913,7 +64406,7 @@ class OnBehalfOfClient extends BaseClient {
     }
     /**
      * generate a server request in accepable format
-     * @param request
+     * @param request - developer provided CommonOnBehalfOfRequest
      */
     async createTokenRequestBody(request) {
         const parameterBuilder = new RequestParameterBuilder();
@@ -64028,13 +64521,27 @@ class ConfidentialClientApplication extends ClientApplication {
         if (Object.values(AADAuthorityConstants).includes(tenantId)) {
             throw createClientAuthError(missingTenantIdError);
         }
+        /*
+         * if this env variable is set, and the developer provided region isn't defined and isn't "DisableMsalForceRegion",
+         * MSAL shall opt-in to ESTS-R with the value of this variable
+         */
+        const ENV_MSAL_FORCE_REGION = process.env[MSAL_FORCE_REGION];
+        let region;
+        if (validRequest.azureRegion !== "DisableMsalForceRegion") {
+            if (!validRequest.azureRegion && ENV_MSAL_FORCE_REGION) {
+                region = ENV_MSAL_FORCE_REGION;
+            }
+            else {
+                region = validRequest.azureRegion;
+            }
+        }
         const azureRegionConfiguration = {
-            azureRegion: validRequest.azureRegion,
+            azureRegion: region,
             environmentRegion: process.env[REGION_ENVIRONMENT_VARIABLE],
         };
         const serverTelemetryManager = this.initializeServerTelemetryManager(ApiId.acquireTokenByClientCredential, validRequest.correlationId, validRequest.skipCache);
         try {
-            const clientCredentialConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, serverTelemetryManager, azureRegionConfiguration, request.azureCloudOptions);
+            const clientCredentialConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, "", serverTelemetryManager, azureRegionConfiguration, request.azureCloudOptions);
             const clientCredentialClient = new ClientCredentialClient(clientCredentialConfig, this.appTokenProvider);
             this.logger.verbose("Client credential client created", validRequest.correlationId);
             return await clientCredentialClient.acquireToken(validRequest);
@@ -64065,7 +64572,7 @@ class ConfidentialClientApplication extends ClientApplication {
             ...(await this.initializeBaseRequest(request)),
         };
         try {
-            const onBehalfOfConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, undefined, undefined, request.azureCloudOptions);
+            const onBehalfOfConfig = await this.buildOauthClientConfiguration(validRequest.authority, validRequest.correlationId, "", undefined, undefined, request.azureCloudOptions);
             const oboClient = new OnBehalfOfClient(onBehalfOfConfig);
             this.logger.verbose("On behalf of client created", validRequest.correlationId);
             return await oboClient.acquireToken(validRequest);
@@ -64760,25 +65267,41 @@ class ManagedIdentityApplication {
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License.
  */
+/**
+ * Cache plugin that serializes data to the cache and deserializes data from the cache
+ * @public
+ */
 class DistributedCachePlugin {
     constructor(client, partitionManager) {
         this.client = client;
         this.partitionManager = partitionManager;
     }
+    /**
+     * Deserializes the cache before accessing it
+     * @param cacheContext - TokenCacheContext
+     */
     async beforeCacheAccess(cacheContext) {
         const partitionKey = await this.partitionManager.getKey();
         const cacheData = await this.client.get(partitionKey);
         cacheContext.tokenCache.deserialize(cacheData);
     }
+    /**
+     * Serializes the cache after accessing it
+     * @param cacheContext - TokenCacheContext
+     */
     async afterCacheAccess(cacheContext) {
         if (cacheContext.cacheHasChanged) {
             const kvStore = cacheContext.tokenCache.getKVStore();
             const accountEntities = Object.values(kvStore).filter((value) => AccountEntity.isAccountEntity(value));
+            let partitionKey;
             if (accountEntities.length > 0) {
                 const accountEntity = accountEntities[0];
-                const partitionKey = await this.partitionManager.extractKey(accountEntity);
-                await this.client.set(partitionKey, cacheContext.tokenCache.serialize());
+                partitionKey = await this.partitionManager.extractKey(accountEntity);
             }
+            else {
+                partitionKey = await this.partitionManager.getKey();
+            }
+            await this.client.set(partitionKey, cacheContext.tokenCache.serialize());
         }
     }
 }
@@ -64816,7 +65339,6 @@ exports.ServerError = ServerError;
 exports.TokenCache = TokenCache;
 exports.TokenCacheContext = TokenCacheContext;
 exports.UsernamePasswordClient = UsernamePasswordClient;
-exports.buildAppConfiguration = buildAppConfiguration;
 exports.internals = internals;
 exports.version = version;
 //# sourceMappingURL=msal-node.cjs.map

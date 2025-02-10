@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 import { Secret } from './models'
 import {
   exportVariable,

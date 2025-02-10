@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 const spaceOrSpecialReplaceChar = '_'
 const separatorReplaceChar = '__'
 export function parseSecretName(

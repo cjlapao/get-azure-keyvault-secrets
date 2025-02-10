@@ -1,5 +1,6 @@
 import jest from 'eslint-plugin-jest'
 import prettier from 'eslint-plugin-prettier'
+import typescript from '@typescript-eslint/eslint-plugin'
 import globals from 'globals'
 import tsParser from '@typescript-eslint/parser'
 import path from 'node:path'
@@ -42,7 +43,8 @@ export default [
   {
     plugins: {
       jest,
-      prettier
+      prettier,
+      typescript
     },
 
     languageOptions: {

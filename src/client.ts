@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/space-before-function-paren */
 import * as core from '@actions/core'
 
 import { ClientSecretCredential, DefaultAzureCredential } from '@azure/identity'
