@@ -83,7 +83,6 @@ export default [
       'no-console': 'off',
       'no-unused-vars': 'off',
       'prettier/prettier': 'error',
-      "space-before-function-paren": ["error", "never"],
       semi: 'off'
     }
   }
