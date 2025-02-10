@@ -32,7 +32,7 @@ export default [
       'dist/*',
       'lib/*',
       '.github/*',
-      "eslint.config.mjs"
+      'eslint.config.mjs'
     ]
   },
   ...compat.extends(
@@ -86,4 +86,4 @@ export default [
       semi: 'off'
     }
   }
-];
+]

@@ -14,7 +14,7 @@
     "strict": true,
     "skipLibCheck": true,
     "newLine": "lf",
-    "allowSyntheticDefaultImports": true,
+    "allowSyntheticDefaultImports": true
   },
   "exclude": [
     "./dist",
