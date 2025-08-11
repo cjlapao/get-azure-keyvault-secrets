@@ -76,7 +76,7 @@
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
-    "@azure/identity": "^4.10.2",
+    "@azure/identity": "^4.11.1",
     "@azure/keyvault-secrets": "^4.10.0",
     "@types/node": "^24.1.0"
   },
