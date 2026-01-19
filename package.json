@@ -75,10 +75,10 @@
     ]
   },
   "dependencies": {
-    "@actions/core": "^2.0.1",
+    "@actions/core": "^2.0.2",
     "@azure/identity": "^4.13.0",
     "@azure/keyvault-secrets": "^4.10.0",
-    "@types/node": "^25.0.3"
+    "@types/node": "^25.0.6"
   },
   "devDependencies": {
     "@babel/core": "^7.28.5",
