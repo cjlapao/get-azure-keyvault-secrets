@@ -60,8 +60,15 @@
       "/node_modules/",
       "/dist/"
     ],
+    "moduleNameMapper": {
+      "^@actions/core$": "<rootDir>/node_modules/@actions/core/lib/core.js"
+    },
+    "transformIgnorePatterns": [
+      "node_modules/(?!@actions/)"
+    ],
     "transform": {
-      "^.+\\.ts$": "ts-jest"
+      "^.+\\.ts$": "ts-jest",
+      "^.+\\.js$": ["babel-jest", {"presets": [["@babel/preset-env", {"targets": {"node": "current"}, "modules": "commonjs"}]]}]
     },
     "coverageReporters": [
       "json-summary",
