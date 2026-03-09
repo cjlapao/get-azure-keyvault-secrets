@@ -68,7 +68,22 @@
     ],
     "transform": {
       "^.+\\.ts$": "ts-jest",
-      "^.+\\.js$": ["babel-jest", {"presets": [["@babel/preset-env", {"targets": {"node": "current"}, "modules": "commonjs"}]]}]
+      "^.+\\.js$": [
+        "babel-jest",
+        {
+          "presets": [
+            [
+              "@babel/preset-env",
+              {
+                "targets": {
+                  "node": "current"
+                },
+                "modules": "commonjs"
+              }
+            ]
+          ]
+        }
+      ]
     },
     "coverageReporters": [
       "json-summary",
