@@ -3,7 +3,7 @@ https://www.npmjs.com/package/generate-license-file
 
 The following npm package may be included in this product:
 
- - @types/node@25.2.0
+ - @types/node@25.3.3
 
 This package contains the following license:
 
@@ -590,7 +590,7 @@ SOFTWARE.
 
 The following npm packages may be included in this product:
 
- - undici-types@7.16.0
+ - undici-types@7.18.2
  - undici@7.22.0
 
 These packages each contain the following license:
