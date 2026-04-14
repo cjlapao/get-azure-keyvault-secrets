@@ -100,7 +100,7 @@
     "@actions/core": "^3.0.0",
     "@azure/identity": "^4.13.1",
     "@azure/keyvault-secrets": "^4.10.0",
-    "@types/node": "^25.5.0"
+    "@types/node": "^25.5.2"
   },
   "devDependencies": {
     "@babel/core": "^7.29.0",
