@@ -67,7 +67,17 @@
       "node_modules/(?!@actions/)"
     ],
     "transform": {
-      "^.+\\.ts$": "ts-jest",
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "diagnostics": {
+            "ignoreCodes": [
+              151002
+            ]
+          },
+          "jestGlobals": true
+        }
+      ],
       "^.+\\.js$": [
         "babel-jest",
         {
