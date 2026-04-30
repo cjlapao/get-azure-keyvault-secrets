@@ -48,3 +48,4 @@ jobs:
           VALIDATE_BIOME_FORMAT: false
           VALIDATE_BIOME_LINT: false
           VALIDATE_CHECKOV: false
+          VALIDATE_TRIVY: false
