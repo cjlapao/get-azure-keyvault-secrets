@@ -39,8 +39,8 @@ var require_tunnel = __commonJS({
     "use strict";
     var net = require("net");
     var tls = require("tls");
-    var http5 = require("http");
-    var https4 = require("https");
+    var http4 = require("http");
+    var https3 = require("https");
     var events = require("events");
     var assert = require("assert");
     var util3 = require("util");
@@ -50,24 +50,24 @@ var require_tunnel = __commonJS({
     exports2.httpsOverHttps = httpsOverHttps2;
     function httpOverHttp2(options) {
       var agent = new TunnelingAgent(options);
-      agent.request = http5.request;
+      agent.request = http4.request;
       return agent;
     }
     function httpsOverHttp2(options) {
       var agent = new TunnelingAgent(options);
-      agent.request = http5.request;
+      agent.request = http4.request;
       agent.createSocket = createSecureSocket;
       agent.defaultPort = 443;
       return agent;
     }
     function httpOverHttps2(options) {
       var agent = new TunnelingAgent(options);
-      agent.request = https4.request;
+      agent.request = https3.request;
       return agent;
     }
     function httpsOverHttps2(options) {
       var agent = new TunnelingAgent(options);
-      agent.request = https4.request;
+      agent.request = https3.request;
       agent.createSocket = createSecureSocket;
       agent.defaultPort = 443;
       return agent;
@@ -76,7 +76,7 @@ var require_tunnel = __commonJS({
       var self2 = this;
       self2.options = options || {};
       self2.proxyOptions = self2.options.proxy || {};
-      self2.maxSockets = self2.options.maxSockets || http5.Agent.defaultMaxSockets;
+      self2.maxSockets = self2.options.maxSockets || http4.Agent.defaultMaxSockets;
       self2.requests = [];
       self2.sockets = [];
       self2.on("free", function onFree(socket, host, port, localAddress) {
@@ -345,7 +345,8 @@ var require_symbols = __commonJS({
       kPingInterval: /* @__PURE__ */ Symbol("ping interval"),
       kNoProxyAgent: /* @__PURE__ */ Symbol("no proxy agent"),
       kHttpProxyAgent: /* @__PURE__ */ Symbol("http proxy agent"),
-      kHttpsProxyAgent: /* @__PURE__ */ Symbol("https proxy agent")
+      kHttpsProxyAgent: /* @__PURE__ */ Symbol("https proxy agent"),
+      kSocks5ProxyAgent: /* @__PURE__ */ Symbol("socks5 proxy agent")
     };
   }
 });
@@ -935,6 +936,29 @@ var require_errors = __commonJS({
         return true;
       }
     };
+    var Socks5ProxyError = class extends UndiciError {
+      constructor(message, code) {
+        super(message);
+        this.name = "Socks5ProxyError";
+        this.message = message || "SOCKS5 proxy error";
+        this.code = code || "UND_ERR_SOCKS5";
+      }
+    };
+    var kMessageSizeExceededError = /* @__PURE__ */ Symbol.for("undici.error.UND_ERR_WS_MESSAGE_SIZE_EXCEEDED");
+    var MessageSizeExceededError = class extends UndiciError {
+      constructor(message) {
+        super(message);
+        this.name = "MessageSizeExceededError";
+        this.message = message || "Max decompressed message size exceeded";
+        this.code = "UND_ERR_WS_MESSAGE_SIZE_EXCEEDED";
+      }
+      static [Symbol.hasInstance](instance) {
+        return instance && instance[kMessageSizeExceededError] === true;
+      }
+      get [kMessageSizeExceededError]() {
+        return true;
+      }
+    };
     module2.exports = {
       AbortError: AbortError3,
       HTTPParserError,
@@ -958,7 +982,9 @@ var require_errors = __commonJS({
       RequestRetryError,
       ResponseError,
       SecureProxyConnectionError,
-      MaxOriginsReachedError
+      MaxOriginsReachedError,
+      Socks5ProxyError,
+      MessageSizeExceededError
     };
   }
 });
@@ -1403,6 +1429,11 @@ var require_util = __commonJS({
     }
     function isIterable(obj) {
       return !!(obj != null && (typeof obj[Symbol.iterator] === "function" || typeof obj[Symbol.asyncIterator] === "function"));
+    }
+    function hasSafeIterator(obj) {
+      const prototype = Object.getPrototypeOf(obj);
+      const ownIterator = Object.prototype.hasOwnProperty.call(obj, Symbol.iterator);
+      return ownIterator || prototype != null && prototype !== Object.prototype && typeof obj[Symbol.iterator] === "function";
     }
     function bodyLength(body) {
       if (body == null) {
@@ -1998,6 +2029,7 @@ var require_util = __commonJS({
       getServerName,
       isStream,
       isIterable,
+      hasSafeIterator,
       isAsyncIterable,
       isDestroyed,
       headerNameToString,
@@ -2304,6 +2336,7 @@ var require_request = __commonJS({
       isBuffer,
       isFormDataLike,
       isIterable,
+      hasSafeIterator,
       isBlobLike,
       serializePathWithQuery,
       assertRequestHandler,
@@ -2331,7 +2364,8 @@ var require_request = __commonJS({
         expectContinue,
         servername,
         throwOnError,
-        maxRedirections
+        maxRedirections,
+        typeOfService
       }, handler) {
         if (typeof path3 !== "string") {
           throw new InvalidArgumentError("path must be a string");
@@ -2347,6 +2381,9 @@ var require_request = __commonJS({
         }
         if (upgrade && typeof upgrade !== "string") {
           throw new InvalidArgumentError("upgrade must be a string");
+        }
+        if (upgrade && !isValidHeaderValue(upgrade)) {
+          throw new InvalidArgumentError("invalid upgrade header");
         }
         if (headersTimeout != null && (!Number.isFinite(headersTimeout) || headersTimeout < 0)) {
           throw new InvalidArgumentError("invalid headersTimeout");
@@ -2366,9 +2403,13 @@ var require_request = __commonJS({
         if (maxRedirections != null && maxRedirections !== 0) {
           throw new InvalidArgumentError("maxRedirections is not supported, use the redirect interceptor");
         }
+        if (typeOfService != null && (!Number.isInteger(typeOfService) || typeOfService < 0 || typeOfService > 255)) {
+          throw new InvalidArgumentError("typeOfService must be an integer between 0 and 255");
+        }
         this.headersTimeout = headersTimeout;
         this.bodyTimeout = bodyTimeout;
         this.method = method;
+        this.typeOfService = typeOfService ?? 0;
         this.abort = null;
         if (body == null) {
           this.body = null;
@@ -2424,7 +2465,7 @@ var require_request = __commonJS({
             processHeader(this, headers[i], headers[i + 1]);
           }
         } else if (headers && typeof headers === "object") {
-          if (headers[Symbol.iterator]) {
+          if (hasSafeIterator(headers)) {
             for (const header of headers) {
               if (!Array.isArray(header) || header.length !== 2) {
                 throw new InvalidArgumentError("headers must be in key-value pair format");
@@ -2593,12 +2634,18 @@ var require_request = __commonJS({
       } else {
         val = `${val}`;
       }
-      if (request5.host === null && headerName === "host") {
+      if (headerName === "host") {
+        if (request5.host !== null) {
+          throw new InvalidArgumentError("duplicate host header");
+        }
         if (typeof val !== "string") {
           throw new InvalidArgumentError("invalid host header");
         }
         request5.host = val;
-      } else if (request5.contentLength === null && headerName === "content-length") {
+      } else if (headerName === "content-length") {
+        if (request5.contentLength !== null) {
+          throw new InvalidArgumentError("duplicate content-length header");
+        }
         request5.contentLength = parseInt(val, 10);
         if (!Number.isFinite(request5.contentLength)) {
           throw new InvalidArgumentError("invalid content-length header");
@@ -2643,6 +2690,9 @@ var require_wrap_handler = __commonJS({
       onConnect(abort, context2) {
         return this.#handler.onConnect?.(abort, context2);
       }
+      onResponseStarted() {
+        return this.#handler.onResponseStarted?.();
+      }
       onHeaders(statusCode, rawHeaders, resume, statusMessage) {
         return this.#handler.onHeaders?.(statusCode, rawHeaders, resume, statusMessage);
       }
@@ -2668,14 +2718,14 @@ var require_wrap_handler = __commonJS({
       onRequestUpgrade(controller, statusCode, headers, socket) {
         const rawHeaders = [];
         for (const [key, val] of Object.entries(headers)) {
-          rawHeaders.push(Buffer.from(key), Array.isArray(val) ? val.map((v) => Buffer.from(v)) : Buffer.from(val));
+          rawHeaders.push(Buffer.from(key, "latin1"), toRawHeaderValue(val));
         }
         this.#handler.onUpgrade?.(statusCode, rawHeaders, socket);
       }
       onResponseStart(controller, statusCode, headers, statusMessage) {
         const rawHeaders = [];
         for (const [key, val] of Object.entries(headers)) {
-          rawHeaders.push(Buffer.from(key), Array.isArray(val) ? val.map((v) => Buffer.from(v)) : Buffer.from(val));
+          rawHeaders.push(Buffer.from(key, "latin1"), toRawHeaderValue(val));
         }
         if (this.#handler.onHeaders?.(statusCode, rawHeaders, () => controller.resume(), statusMessage) === false) {
           controller.pause();
@@ -2689,7 +2739,7 @@ var require_wrap_handler = __commonJS({
       onResponseEnd(controller, trailers) {
         const rawTrailers = [];
         for (const [key, val] of Object.entries(trailers)) {
-          rawTrailers.push(Buffer.from(key), Array.isArray(val) ? val.map((v) => Buffer.from(v)) : Buffer.from(val));
+          rawTrailers.push(Buffer.from(key, "latin1"), toRawHeaderValue(val));
         }
         this.#handler.onComplete?.(rawTrailers);
       }
@@ -2700,6 +2750,9 @@ var require_wrap_handler = __commonJS({
         this.#handler.onError?.(err);
       }
     };
+    function toRawHeaderValue(value) {
+      return Array.isArray(value) ? value.map((item) => Buffer.from(item, "latin1")) : Buffer.from(value, "latin1");
+    }
   }
 });
 
@@ -2799,6 +2852,9 @@ var require_unwrap_handler = __commonJS({
       onConnect(abort, context2) {
         this.#controller = new UnwrapController(abort);
         this.#handler.onRequestStart?.(this.#controller, context2);
+      }
+      onResponseStarted() {
+        return this.#handler.onResponseStarted?.();
       }
       onUpgrade(statusCode, rawHeaders, socket) {
         this.#handler.onRequestUpgrade?.(this.#controller, statusCode, parseHeaders(rawHeaders), socket);
@@ -4806,6 +4862,7 @@ var require_webidl = __commonJS({
       };
     };
     webidl.dictionaryConverter = function(converters) {
+      converters.sort((a, b) => (a.key > b.key) - (a.key < b.key));
       return (dictionary, prefix, argument) => {
         const dict = {};
         if (dictionary != null && webidl.util.Type(dictionary) !== OBJECT) {
@@ -7488,6 +7545,9 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
+      if (socket.setTypeOfService) {
+        socket.setTypeOfService(request5.typeOfService);
+      }
       let header = `${method} ${path3} HTTP/1.1\r
 `;
       if (typeof host === "string") {
@@ -8320,6 +8380,9 @@ var require_client_h2 = __commonJS({
         }
       });
       stream.on("data", (chunk) => {
+        if (request5.aborted || request5.completed) {
+          return;
+        }
         if (request5.onData(chunk) === false) {
           stream.pause();
         }
@@ -8370,6 +8433,7 @@ var require_client_h2 = __commonJS({
         if (request5.aborted || request5.completed) {
           return;
         }
+        stream.removeAllListeners("data");
         request5.onComplete(trailers);
       });
       return true;
@@ -8563,7 +8627,7 @@ var require_client = __commonJS({
     "use strict";
     var assert = require("assert");
     var net = require("net");
-    var http5 = require("http");
+    var http4 = require("http");
     var util3 = require_util();
     var { ClientStats } = require_stats();
     var { channels } = require_diagnostics();
@@ -8621,7 +8685,7 @@ var require_client = __commonJS({
     var connectH1 = require_client_h1();
     var connectH2 = require_client_h2();
     var kClosedResolve = /* @__PURE__ */ Symbol("kClosedResolve");
-    var getDefaultNodeMaxHeaderSize = http5 && http5.maxHeaderSize && Number.isInteger(http5.maxHeaderSize) && http5.maxHeaderSize > 0 ? () => http5.maxHeaderSize : () => {
+    var getDefaultNodeMaxHeaderSize = http4 && http4.maxHeaderSize && Number.isInteger(http4.maxHeaderSize) && http4.maxHeaderSize > 0 ? () => http4.maxHeaderSize : () => {
       throw new InvalidArgumentError("http module not available or http.maxHeaderSize invalid");
     };
     var noop = () => {
@@ -8755,6 +8819,9 @@ var require_client = __commonJS({
             ...typeof autoSelectFamily === "boolean" ? { autoSelectFamily, autoSelectFamilyAttemptTimeout } : void 0,
             ...connect2
           });
+        } else if (socketPath != null) {
+          const customConnect = connect2;
+          connect2 = (opts, callback) => customConnect({ ...opts, socketPath }, callback);
         }
         this[kUrl] = util3.parseOrigin(url);
         this[kConnector] = connect2;
@@ -9034,6 +9101,9 @@ var require_client = __commonJS({
           return;
         }
         const request5 = client[kQueue][client[kPendingIdx]];
+        if (request5 === null) {
+          return;
+        }
         if (client[kUrl].protocol === "https:" && client[kServerName] !== request5.servername) {
           if (client[kRunning] > 0) {
             return;
@@ -9378,7 +9448,7 @@ var require_pool = __commonJS({
         super();
         this[kConnections] = connections || null;
         this[kUrl] = util3.parseOrigin(origin);
-        this[kOptions] = { ...util3.deepClone(options), connect, allowH2, clientTtl };
+        this[kOptions] = { ...util3.deepClone(options), connect, allowH2, clientTtl, socketPath };
         this[kOptions].interceptors = options.interceptors ? { ...options.interceptors } : void 0;
         this[kFactory] = factory;
         this.on("connect", (origin2, targets) => {
@@ -9435,7 +9505,7 @@ var require_balanced_pool = __commonJS({
     } = require_pool_base();
     var Pool = require_pool();
     var { kUrl } = require_symbols();
-    var { parseOrigin } = require_util();
+    var util3 = require_util();
     var kFactory = /* @__PURE__ */ Symbol("factory");
     var kOptions = /* @__PURE__ */ Symbol("options");
     var kGreatestCommonDivisor = /* @__PURE__ */ Symbol("kGreatestCommonDivisor");
@@ -9462,7 +9532,8 @@ var require_balanced_pool = __commonJS({
           throw new InvalidArgumentError("factory must be a function.");
         }
         super();
-        this[kOptions] = opts;
+        this[kOptions] = { ...util3.deepClone(opts) };
+        this[kOptions].interceptors = opts.interceptors ? { ...opts.interceptors } : void 0;
         this[kIndex] = -1;
         this[kCurrentWeight] = 0;
         this[kMaxWeightPerServer] = this[kOptions].maxWeightPerServer || 100;
@@ -9477,11 +9548,11 @@ var require_balanced_pool = __commonJS({
         this._updateBalancedPoolStats();
       }
       addUpstream(upstream) {
-        const upstreamOrigin = parseOrigin(upstream).origin;
+        const upstreamOrigin = util3.parseOrigin(upstream).origin;
         if (this[kClients].find((pool2) => pool2[kUrl].origin === upstreamOrigin && pool2.closed !== true && pool2.destroyed !== true)) {
           return this;
         }
-        const pool = this[kFactory](upstreamOrigin, Object.assign({}, this[kOptions]));
+        const pool = this[kFactory](upstreamOrigin, this[kOptions]);
         this[kAddClient](pool);
         pool.on("connect", () => {
           pool[kWeight] = Math.min(this[kMaxWeightPerServer], pool[kWeight] + this[kErrorPenalty]);
@@ -9511,7 +9582,7 @@ var require_balanced_pool = __commonJS({
         this[kGreatestCommonDivisor] = result;
       }
       removeUpstream(upstream) {
-        const upstreamOrigin = parseOrigin(upstream).origin;
+        const upstreamOrigin = util3.parseOrigin(upstream).origin;
         const pool = this[kClients].find((pool2) => pool2[kUrl].origin === upstreamOrigin && pool2.closed !== true && pool2.destroyed !== true);
         if (pool) {
           this[kRemoveClient](pool);
@@ -9519,7 +9590,7 @@ var require_balanced_pool = __commonJS({
         return this;
       }
       getUpstream(upstream) {
-        const upstreamOrigin = parseOrigin(upstream).origin;
+        const upstreamOrigin = util3.parseOrigin(upstream).origin;
         return this[kClients].find((pool) => pool[kUrl].origin === upstreamOrigin && pool.closed !== true && pool.destroyed !== true);
       }
       get upstreams() {
@@ -9628,7 +9699,7 @@ var require_round_robin_pool = __commonJS({
         super();
         this[kConnections] = connections || null;
         this[kUrl] = util3.parseOrigin(origin);
-        this[kOptions] = { ...util3.deepClone(options), connect, allowH2, clientTtl };
+        this[kOptions] = { ...util3.deepClone(options), connect, allowH2, clientTtl, socketPath };
         this[kOptions].interceptors = options.interceptors ? { ...options.interceptors } : void 0;
         this[kFactory] = factory;
         this[kIndex] = -1;
@@ -9814,6 +9885,667 @@ var require_agent = __commonJS({
   }
 });
 
+// node_modules/undici/lib/core/socks5-utils.js
+var require_socks5_utils = __commonJS({
+  "node_modules/undici/lib/core/socks5-utils.js"(exports2, module2) {
+    "use strict";
+    var { Buffer: Buffer3 } = require("buffer");
+    var net = require("net");
+    var { InvalidArgumentError } = require_errors();
+    function parseAddress(address) {
+      if (net.isIPv4(address)) {
+        const parts = address.split(".").map(Number);
+        return {
+          type: 1,
+          // IPv4
+          buffer: Buffer3.from(parts)
+        };
+      }
+      if (net.isIPv6(address)) {
+        return {
+          type: 4,
+          // IPv6
+          buffer: parseIPv6(address)
+        };
+      }
+      const domainBuffer = Buffer3.from(address, "utf8");
+      if (domainBuffer.length > 255) {
+        throw new InvalidArgumentError("Domain name too long (max 255 bytes)");
+      }
+      return {
+        type: 3,
+        // Domain
+        buffer: Buffer3.concat([Buffer3.from([domainBuffer.length]), domainBuffer])
+      };
+    }
+    function parseIPv6(address) {
+      const buffer = Buffer3.alloc(16);
+      const parts = address.split(":");
+      let partIndex = 0;
+      let bufferIndex = 0;
+      const doubleColonIndex = address.indexOf("::");
+      if (doubleColonIndex !== -1) {
+        const nonEmptyParts = parts.filter((p) => p.length > 0).length;
+        const skipParts = 8 - nonEmptyParts;
+        for (let i = 0; i < parts.length; i++) {
+          if (parts[i] === "" && i === doubleColonIndex / 3) {
+            bufferIndex += skipParts * 2;
+          } else if (parts[i] !== "") {
+            const value = parseInt(parts[i], 16);
+            buffer.writeUInt16BE(value, bufferIndex);
+            bufferIndex += 2;
+          }
+        }
+      } else {
+        for (const part of parts) {
+          if (part === "") continue;
+          const value = parseInt(part, 16);
+          buffer.writeUInt16BE(value, partIndex * 2);
+          partIndex++;
+        }
+      }
+      return buffer;
+    }
+    function buildAddressBuffer(type3, addressBuffer, port) {
+      const portBuffer = Buffer3.allocUnsafe(2);
+      portBuffer.writeUInt16BE(port, 0);
+      return Buffer3.concat([
+        Buffer3.from([type3]),
+        addressBuffer,
+        portBuffer
+      ]);
+    }
+    function parseResponseAddress(buffer, offset = 0) {
+      if (buffer.length < offset + 1) {
+        throw new InvalidArgumentError("Buffer too small to contain address type");
+      }
+      const addressType = buffer[offset];
+      let address;
+      let currentOffset = offset + 1;
+      switch (addressType) {
+        case 1: {
+          if (buffer.length < currentOffset + 6) {
+            throw new InvalidArgumentError("Buffer too small for IPv4 address");
+          }
+          address = Array.from(buffer.subarray(currentOffset, currentOffset + 4)).join(".");
+          currentOffset += 4;
+          break;
+        }
+        case 3: {
+          if (buffer.length < currentOffset + 1) {
+            throw new InvalidArgumentError("Buffer too small for domain length");
+          }
+          const domainLength = buffer[currentOffset];
+          currentOffset += 1;
+          if (buffer.length < currentOffset + domainLength + 2) {
+            throw new InvalidArgumentError("Buffer too small for domain address");
+          }
+          address = buffer.subarray(currentOffset, currentOffset + domainLength).toString("utf8");
+          currentOffset += domainLength;
+          break;
+        }
+        case 4: {
+          if (buffer.length < currentOffset + 18) {
+            throw new InvalidArgumentError("Buffer too small for IPv6 address");
+          }
+          const parts = [];
+          for (let i = 0; i < 8; i++) {
+            const value = buffer.readUInt16BE(currentOffset + i * 2);
+            parts.push(value.toString(16));
+          }
+          address = parts.join(":");
+          currentOffset += 16;
+          break;
+        }
+        default:
+          throw new InvalidArgumentError(`Invalid address type: ${addressType}`);
+      }
+      if (buffer.length < currentOffset + 2) {
+        throw new InvalidArgumentError("Buffer too small for port");
+      }
+      const port = buffer.readUInt16BE(currentOffset);
+      currentOffset += 2;
+      return {
+        address,
+        port,
+        bytesRead: currentOffset - offset
+      };
+    }
+    function createReplyError(replyCode) {
+      const messages = {
+        1: "General SOCKS server failure",
+        2: "Connection not allowed by ruleset",
+        3: "Network unreachable",
+        4: "Host unreachable",
+        5: "Connection refused",
+        6: "TTL expired",
+        7: "Command not supported",
+        8: "Address type not supported"
+      };
+      const message = messages[replyCode] || `Unknown SOCKS5 error code: ${replyCode}`;
+      const error2 = new Error(message);
+      error2.code = `SOCKS5_${replyCode}`;
+      return error2;
+    }
+    module2.exports = {
+      parseAddress,
+      parseIPv6,
+      buildAddressBuffer,
+      parseResponseAddress,
+      createReplyError
+    };
+  }
+});
+
+// node_modules/undici/lib/core/socks5-client.js
+var require_socks5_client = __commonJS({
+  "node_modules/undici/lib/core/socks5-client.js"(exports2, module2) {
+    "use strict";
+    var { EventEmitter } = require("events");
+    var { Buffer: Buffer3 } = require("buffer");
+    var { InvalidArgumentError, Socks5ProxyError } = require_errors();
+    var { debuglog } = require("util");
+    var { parseAddress } = require_socks5_utils();
+    var debug2 = debuglog("undici:socks5");
+    var SOCKS_VERSION = 5;
+    var AUTH_METHODS = {
+      NO_AUTH: 0,
+      GSSAPI: 1,
+      USERNAME_PASSWORD: 2,
+      NO_ACCEPTABLE: 255
+    };
+    var COMMANDS = {
+      CONNECT: 1,
+      BIND: 2,
+      UDP_ASSOCIATE: 3
+    };
+    var ADDRESS_TYPES = {
+      IPV4: 1,
+      DOMAIN: 3,
+      IPV6: 4
+    };
+    var REPLY_CODES = {
+      SUCCEEDED: 0,
+      GENERAL_FAILURE: 1,
+      CONNECTION_NOT_ALLOWED: 2,
+      NETWORK_UNREACHABLE: 3,
+      HOST_UNREACHABLE: 4,
+      CONNECTION_REFUSED: 5,
+      TTL_EXPIRED: 6,
+      COMMAND_NOT_SUPPORTED: 7,
+      ADDRESS_TYPE_NOT_SUPPORTED: 8
+    };
+    var STATES = {
+      INITIAL: "initial",
+      HANDSHAKING: "handshaking",
+      AUTHENTICATING: "authenticating",
+      CONNECTING: "connecting",
+      CONNECTED: "connected",
+      ERROR: "error",
+      CLOSED: "closed"
+    };
+    var Socks5Client = class extends EventEmitter {
+      constructor(socket, options = {}) {
+        super();
+        if (!socket) {
+          throw new InvalidArgumentError("socket is required");
+        }
+        this.socket = socket;
+        this.options = options;
+        this.state = STATES.INITIAL;
+        this.buffer = Buffer3.alloc(0);
+        this.authMethods = [];
+        if (options.username && options.password) {
+          this.authMethods.push(AUTH_METHODS.USERNAME_PASSWORD);
+        }
+        this.authMethods.push(AUTH_METHODS.NO_AUTH);
+        this.socket.on("data", this.onData.bind(this));
+        this.socket.on("error", this.onError.bind(this));
+        this.socket.on("close", this.onClose.bind(this));
+      }
+      /**
+       * Handle incoming data from the socket
+       */
+      onData(data) {
+        debug2("received data", data.length, "bytes in state", this.state);
+        this.buffer = Buffer3.concat([this.buffer, data]);
+        try {
+          switch (this.state) {
+            case STATES.HANDSHAKING:
+              this.handleHandshakeResponse();
+              break;
+            case STATES.AUTHENTICATING:
+              this.handleAuthResponse();
+              break;
+            case STATES.CONNECTING:
+              this.handleConnectResponse();
+              break;
+          }
+        } catch (err) {
+          this.onError(err);
+        }
+      }
+      /**
+       * Handle socket errors
+       */
+      onError(err) {
+        debug2("socket error", err);
+        this.state = STATES.ERROR;
+        this.emit("error", err);
+        this.destroy();
+      }
+      /**
+       * Handle socket close
+       */
+      onClose() {
+        debug2("socket closed");
+        this.state = STATES.CLOSED;
+        this.emit("close");
+      }
+      /**
+       * Destroy the client and underlying socket
+       */
+      destroy() {
+        if (this.socket && !this.socket.destroyed) {
+          this.socket.destroy();
+        }
+      }
+      /**
+       * Start the SOCKS5 handshake
+       */
+      handshake() {
+        if (this.state !== STATES.INITIAL) {
+          throw new InvalidArgumentError("Handshake already started");
+        }
+        debug2("starting handshake with", this.authMethods.length, "auth methods");
+        this.state = STATES.HANDSHAKING;
+        const request5 = Buffer3.alloc(2 + this.authMethods.length);
+        request5[0] = SOCKS_VERSION;
+        request5[1] = this.authMethods.length;
+        this.authMethods.forEach((method, i) => {
+          request5[2 + i] = method;
+        });
+        this.socket.write(request5);
+      }
+      /**
+       * Handle handshake response from server
+       */
+      handleHandshakeResponse() {
+        if (this.buffer.length < 2) {
+          return;
+        }
+        const version3 = this.buffer[0];
+        const method = this.buffer[1];
+        if (version3 !== SOCKS_VERSION) {
+          throw new Socks5ProxyError(`Invalid SOCKS version: ${version3}`, "UND_ERR_SOCKS5_VERSION");
+        }
+        if (method === AUTH_METHODS.NO_ACCEPTABLE) {
+          throw new Socks5ProxyError("No acceptable authentication method", "UND_ERR_SOCKS5_AUTH_REJECTED");
+        }
+        this.buffer = this.buffer.subarray(2);
+        debug2("server selected auth method", method);
+        if (method === AUTH_METHODS.NO_AUTH) {
+          this.emit("authenticated");
+        } else if (method === AUTH_METHODS.USERNAME_PASSWORD) {
+          this.state = STATES.AUTHENTICATING;
+          this.sendAuthRequest();
+        } else {
+          throw new Socks5ProxyError(`Unsupported authentication method: ${method}`, "UND_ERR_SOCKS5_AUTH_METHOD");
+        }
+      }
+      /**
+       * Send username/password authentication request
+       */
+      sendAuthRequest() {
+        const { username, password } = this.options;
+        if (!username || !password) {
+          throw new InvalidArgumentError("Username and password required for authentication");
+        }
+        debug2("sending username/password auth");
+        const usernameBuffer = Buffer3.from(username);
+        const passwordBuffer = Buffer3.from(password);
+        if (usernameBuffer.length > 255 || passwordBuffer.length > 255) {
+          throw new InvalidArgumentError("Username or password too long");
+        }
+        const request5 = Buffer3.alloc(3 + usernameBuffer.length + passwordBuffer.length);
+        request5[0] = 1;
+        request5[1] = usernameBuffer.length;
+        usernameBuffer.copy(request5, 2);
+        request5[2 + usernameBuffer.length] = passwordBuffer.length;
+        passwordBuffer.copy(request5, 3 + usernameBuffer.length);
+        this.socket.write(request5);
+      }
+      /**
+       * Handle authentication response
+       */
+      handleAuthResponse() {
+        if (this.buffer.length < 2) {
+          return;
+        }
+        const version3 = this.buffer[0];
+        const status = this.buffer[1];
+        if (version3 !== 1) {
+          throw new Socks5ProxyError(`Invalid auth sub-negotiation version: ${version3}`, "UND_ERR_SOCKS5_AUTH_VERSION");
+        }
+        if (status !== 0) {
+          throw new Socks5ProxyError("Authentication failed", "UND_ERR_SOCKS5_AUTH_FAILED");
+        }
+        this.buffer = this.buffer.subarray(2);
+        debug2("authentication successful");
+        this.emit("authenticated");
+      }
+      /**
+       * Send CONNECT command
+       * @param {string} address - Target address (IP or domain)
+       * @param {number} port - Target port
+       */
+      connect(address, port) {
+        if (this.state === STATES.CONNECTED) {
+          throw new InvalidArgumentError("Already connected");
+        }
+        debug2("connecting to", address, port);
+        this.state = STATES.CONNECTING;
+        const request5 = this.buildConnectRequest(COMMANDS.CONNECT, address, port);
+        this.socket.write(request5);
+      }
+      /**
+       * Build a SOCKS5 request
+       */
+      buildConnectRequest(command, address, port) {
+        const { type: addressType, buffer: addressBuffer } = parseAddress(address);
+        const request5 = Buffer3.alloc(4 + addressBuffer.length + 2);
+        request5[0] = SOCKS_VERSION;
+        request5[1] = command;
+        request5[2] = 0;
+        request5[3] = addressType;
+        addressBuffer.copy(request5, 4);
+        request5.writeUInt16BE(port, 4 + addressBuffer.length);
+        return request5;
+      }
+      /**
+       * Handle CONNECT response
+       */
+      handleConnectResponse() {
+        if (this.buffer.length < 4) {
+          return;
+        }
+        const version3 = this.buffer[0];
+        const reply = this.buffer[1];
+        const addressType = this.buffer[3];
+        if (version3 !== SOCKS_VERSION) {
+          throw new Socks5ProxyError(`Invalid SOCKS version in reply: ${version3}`, "UND_ERR_SOCKS5_REPLY_VERSION");
+        }
+        let responseLength = 4;
+        if (addressType === ADDRESS_TYPES.IPV4) {
+          responseLength += 4 + 2;
+        } else if (addressType === ADDRESS_TYPES.DOMAIN) {
+          if (this.buffer.length < 5) {
+            return;
+          }
+          responseLength += 1 + this.buffer[4] + 2;
+        } else if (addressType === ADDRESS_TYPES.IPV6) {
+          responseLength += 16 + 2;
+        } else {
+          throw new Socks5ProxyError(`Invalid address type in reply: ${addressType}`, "UND_ERR_SOCKS5_ADDR_TYPE");
+        }
+        if (this.buffer.length < responseLength) {
+          return;
+        }
+        if (reply !== REPLY_CODES.SUCCEEDED) {
+          const errorMessage = this.getReplyErrorMessage(reply);
+          throw new Socks5ProxyError(`SOCKS5 connection failed: ${errorMessage}`, `UND_ERR_SOCKS5_REPLY_${reply}`);
+        }
+        let boundAddress;
+        let offset = 4;
+        if (addressType === ADDRESS_TYPES.IPV4) {
+          boundAddress = Array.from(this.buffer.subarray(offset, offset + 4)).join(".");
+          offset += 4;
+        } else if (addressType === ADDRESS_TYPES.DOMAIN) {
+          const domainLength = this.buffer[offset];
+          offset += 1;
+          boundAddress = this.buffer.subarray(offset, offset + domainLength).toString();
+          offset += domainLength;
+        } else if (addressType === ADDRESS_TYPES.IPV6) {
+          const parts = [];
+          for (let i = 0; i < 8; i++) {
+            const value = this.buffer.readUInt16BE(offset + i * 2);
+            parts.push(value.toString(16));
+          }
+          boundAddress = parts.join(":");
+          offset += 16;
+        }
+        const boundPort = this.buffer.readUInt16BE(offset);
+        this.buffer = this.buffer.subarray(responseLength);
+        this.state = STATES.CONNECTED;
+        debug2("connected, bound address:", boundAddress, "port:", boundPort);
+        this.emit("connected", { address: boundAddress, port: boundPort });
+      }
+      /**
+       * Get human-readable error message for reply code
+       */
+      getReplyErrorMessage(reply) {
+        switch (reply) {
+          case REPLY_CODES.GENERAL_FAILURE:
+            return "General SOCKS server failure";
+          case REPLY_CODES.CONNECTION_NOT_ALLOWED:
+            return "Connection not allowed by ruleset";
+          case REPLY_CODES.NETWORK_UNREACHABLE:
+            return "Network unreachable";
+          case REPLY_CODES.HOST_UNREACHABLE:
+            return "Host unreachable";
+          case REPLY_CODES.CONNECTION_REFUSED:
+            return "Connection refused";
+          case REPLY_CODES.TTL_EXPIRED:
+            return "TTL expired";
+          case REPLY_CODES.COMMAND_NOT_SUPPORTED:
+            return "Command not supported";
+          case REPLY_CODES.ADDRESS_TYPE_NOT_SUPPORTED:
+            return "Address type not supported";
+          default:
+            return `Unknown error code: ${reply}`;
+        }
+      }
+    };
+    module2.exports = {
+      Socks5Client,
+      AUTH_METHODS,
+      COMMANDS,
+      ADDRESS_TYPES,
+      REPLY_CODES,
+      STATES
+    };
+  }
+});
+
+// node_modules/undici/lib/dispatcher/socks5-proxy-agent.js
+var require_socks5_proxy_agent = __commonJS({
+  "node_modules/undici/lib/dispatcher/socks5-proxy-agent.js"(exports2, module2) {
+    "use strict";
+    var net = require("net");
+    var { URL: URL2 } = require("url");
+    var tls;
+    var DispatcherBase = require_dispatcher_base();
+    var { InvalidArgumentError } = require_errors();
+    var { Socks5Client } = require_socks5_client();
+    var { kDispatch, kClose, kDestroy } = require_symbols();
+    var Pool = require_pool();
+    var buildConnector = require_connect();
+    var { debuglog } = require("util");
+    var debug2 = debuglog("undici:socks5-proxy");
+    var kProxyUrl = /* @__PURE__ */ Symbol("proxy url");
+    var kProxyHeaders = /* @__PURE__ */ Symbol("proxy headers");
+    var kProxyAuth = /* @__PURE__ */ Symbol("proxy auth");
+    var kPool = /* @__PURE__ */ Symbol("pool");
+    var kConnector = /* @__PURE__ */ Symbol("connector");
+    var experimentalWarningEmitted = false;
+    var Socks5ProxyAgent = class extends DispatcherBase {
+      constructor(proxyUrl, options = {}) {
+        super();
+        if (!experimentalWarningEmitted) {
+          process.emitWarning(
+            "SOCKS5 proxy support is experimental and subject to change",
+            "ExperimentalWarning"
+          );
+          experimentalWarningEmitted = true;
+        }
+        if (!proxyUrl) {
+          throw new InvalidArgumentError("Proxy URL is mandatory");
+        }
+        const url = typeof proxyUrl === "string" ? new URL2(proxyUrl) : proxyUrl;
+        if (url.protocol !== "socks5:" && url.protocol !== "socks:") {
+          throw new InvalidArgumentError("Proxy URL must use socks5:// or socks:// protocol");
+        }
+        this[kProxyUrl] = url;
+        this[kProxyHeaders] = options.headers || {};
+        this[kProxyAuth] = {
+          username: options.username || (url.username ? decodeURIComponent(url.username) : null),
+          password: options.password || (url.password ? decodeURIComponent(url.password) : null)
+        };
+        this[kConnector] = options.connect || buildConnector({
+          ...options.proxyTls,
+          servername: options.proxyTls?.servername || url.hostname
+        });
+        this[kPool] = null;
+      }
+      /**
+       * Create a SOCKS5 connection to the proxy
+       */
+      async createSocks5Connection(targetHost, targetPort) {
+        const proxyHost = this[kProxyUrl].hostname;
+        const proxyPort = parseInt(this[kProxyUrl].port) || 1080;
+        debug2("creating SOCKS5 connection to", proxyHost, proxyPort);
+        const socket = await new Promise((resolve, reject) => {
+          const onConnect = () => {
+            socket2.removeListener("error", onError);
+            resolve(socket2);
+          };
+          const onError = (err) => {
+            socket2.removeListener("connect", onConnect);
+            reject(err);
+          };
+          const socket2 = net.connect({
+            host: proxyHost,
+            port: proxyPort
+          });
+          socket2.once("connect", onConnect);
+          socket2.once("error", onError);
+        });
+        const socks5Client = new Socks5Client(socket, this[kProxyAuth]);
+        socks5Client.on("error", (err) => {
+          debug2("SOCKS5 error:", err);
+          socket.destroy();
+        });
+        await socks5Client.handshake();
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("SOCKS5 authentication timeout"));
+          }, 5e3);
+          const onAuthenticated = () => {
+            clearTimeout(timeout);
+            socks5Client.removeListener("error", onError);
+            resolve();
+          };
+          const onError = (err) => {
+            clearTimeout(timeout);
+            socks5Client.removeListener("authenticated", onAuthenticated);
+            reject(err);
+          };
+          if (socks5Client.state === "authenticated") {
+            clearTimeout(timeout);
+            resolve();
+          } else {
+            socks5Client.once("authenticated", onAuthenticated);
+            socks5Client.once("error", onError);
+          }
+        });
+        await socks5Client.connect(targetHost, targetPort);
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("SOCKS5 connection timeout"));
+          }, 5e3);
+          const onConnected = (info) => {
+            debug2("SOCKS5 tunnel established to", targetHost, targetPort, "via", info);
+            clearTimeout(timeout);
+            socks5Client.removeListener("error", onError);
+            resolve();
+          };
+          const onError = (err) => {
+            clearTimeout(timeout);
+            socks5Client.removeListener("connected", onConnected);
+            reject(err);
+          };
+          socks5Client.once("connected", onConnected);
+          socks5Client.once("error", onError);
+        });
+        return socket;
+      }
+      /**
+       * Dispatch a request through the SOCKS5 proxy
+       */
+      async [kDispatch](opts, handler) {
+        const { origin } = opts;
+        debug2("dispatching request to", origin, "via SOCKS5");
+        try {
+          if (!this[kPool] || this[kPool].destroyed || this[kPool].closed) {
+            this[kPool] = new Pool(origin, {
+              pipelining: opts.pipelining,
+              connections: opts.connections,
+              connect: async (connectOpts, callback) => {
+                try {
+                  const url = new URL2(origin);
+                  const targetHost = url.hostname;
+                  const targetPort = parseInt(url.port) || (url.protocol === "https:" ? 443 : 80);
+                  debug2("establishing SOCKS5 connection to", targetHost, targetPort);
+                  const socket = await this.createSocks5Connection(targetHost, targetPort);
+                  let finalSocket = socket;
+                  if (url.protocol === "https:") {
+                    if (!tls) {
+                      tls = require("tls");
+                    }
+                    debug2("upgrading to TLS");
+                    finalSocket = tls.connect({
+                      socket,
+                      servername: targetHost,
+                      ...connectOpts.tls || {}
+                    });
+                    await new Promise((resolve, reject) => {
+                      finalSocket.once("secureConnect", resolve);
+                      finalSocket.once("error", reject);
+                    });
+                  }
+                  callback(null, finalSocket);
+                } catch (err) {
+                  debug2("SOCKS5 connection error:", err);
+                  callback(err);
+                }
+              }
+            });
+          }
+          return this[kPool][kDispatch](opts, handler);
+        } catch (err) {
+          debug2("dispatch error:", err);
+          if (typeof handler.onError === "function") {
+            handler.onError(err);
+          } else {
+            throw err;
+          }
+        }
+      }
+      async [kClose]() {
+        if (this[kPool]) {
+          await this[kPool].close();
+        }
+      }
+      async [kDestroy](err) {
+        if (this[kPool]) {
+          await this[kPool].destroy(err);
+        }
+      }
+    };
+    module2.exports = Socks5ProxyAgent;
+  }
+});
+
 // node_modules/undici/lib/dispatcher/proxy-agent.js
 var require_proxy_agent = __commonJS({
   "node_modules/undici/lib/dispatcher/proxy-agent.js"(exports2, module2) {
@@ -9826,6 +10558,7 @@ var require_proxy_agent = __commonJS({
     var buildConnector = require_connect();
     var Client2 = require_client();
     var { channels } = require_diagnostics();
+    var Socks5ProxyAgent = require_socks5_proxy_agent();
     var kAgent = /* @__PURE__ */ Symbol("proxy agent");
     var kClient = /* @__PURE__ */ Symbol("proxy client");
     var kProxyHeaders = /* @__PURE__ */ Symbol("proxy headers");
@@ -9924,6 +10657,16 @@ var require_proxy_agent = __commonJS({
         const agentFactory = opts.factory || defaultAgentFactory;
         const factory = (origin2, options) => {
           const { protocol: protocol2 } = new URL(origin2);
+          if (this[kProxy].protocol === "socks5:" || this[kProxy].protocol === "socks:") {
+            return new Socks5ProxyAgent(this[kProxy].uri, {
+              headers: this[kProxyHeaders],
+              connect,
+              factory: agentFactory,
+              username: opts.username || username,
+              password: opts.password || password,
+              proxyTls: opts.proxyTls
+            });
+          }
           if (!this[kTunnelProxy] && protocol2 === "http:" && this[kProxy].protocol === "http:") {
             return new Http1ProxyWrapper(this[kProxy].uri, {
               headers: this[kProxyHeaders],
@@ -9933,11 +10676,19 @@ var require_proxy_agent = __commonJS({
           }
           return agentFactory(origin2, options);
         };
-        this[kClient] = clientFactory(url, { connect });
+        if (protocol === "socks5:" || protocol === "socks:") {
+          this[kClient] = null;
+        } else {
+          this[kClient] = clientFactory(url, { connect });
+        }
         this[kAgent] = new Agent5({
           ...opts,
           factory,
           connect: async (opts2, callback) => {
+            if (!this[kClient]) {
+              callback(new InvalidArgumentError("Cannot establish tunnel connection without a proxy client"));
+              return;
+            }
             let requestedPath = opts2.host;
             if (!opts2.port) {
               requestedPath += `:${defaultProtocolPort(opts2.protocol)}`;
@@ -10017,16 +10768,18 @@ var require_proxy_agent = __commonJS({
         }
       }
       [kClose]() {
-        return Promise.all([
-          this[kAgent].close(),
-          this[kClient].close()
-        ]);
+        const promises3 = [this[kAgent].close()];
+        if (this[kClient]) {
+          promises3.push(this[kClient].close());
+        }
+        return Promise.all(promises3);
       }
       [kDestroy]() {
-        return Promise.all([
-          this[kAgent].destroy(),
-          this[kClient].destroy()
-        ]);
+        const promises3 = [this[kAgent].destroy()];
+        if (this[kClient]) {
+          promises3.push(this[kClient].destroy());
+        }
+        return Promise.all(promises3);
       }
     };
     function buildHeaders(headers) {
@@ -13892,7 +14645,7 @@ var require_redirect_handler = __commonJS({
           }
         }
       } else if (headers && typeof headers === "object") {
-        const entries = typeof headers[Symbol.iterator] === "function" ? headers : Object.entries(headers);
+        const entries = util3.hasSafeIterator(headers) ? headers : Object.entries(headers);
         for (const [key, value] of entries) {
           if (!shouldRemoveHeader(key, removeContent, unknownOrigin)) {
             ret.push(key, value);
@@ -14130,6 +14883,85 @@ var require_dns = __commonJS({
     var DecoratorHandler = require_decorator_handler();
     var { InvalidArgumentError, InformationalError } = require_errors();
     var maxInt = Math.pow(2, 31) - 1;
+    function hasSafeIterator(headers) {
+      const prototype = Object.getPrototypeOf(headers);
+      const ownIterator = Object.prototype.hasOwnProperty.call(headers, Symbol.iterator);
+      return ownIterator || prototype != null && prototype !== Object.prototype && typeof headers[Symbol.iterator] === "function";
+    }
+    function isHostHeader(key) {
+      return typeof key === "string" && key.toLowerCase() === "host";
+    }
+    function normalizeHeaders(headers) {
+      if (headers == null) {
+        return null;
+      }
+      if (Array.isArray(headers)) {
+        if (headers.length === 0 || !Array.isArray(headers[0])) {
+          return headers;
+        }
+        const normalized = [];
+        for (const header of headers) {
+          if (Array.isArray(header) && header.length === 2) {
+            normalized.push(header[0], header[1]);
+          } else {
+            normalized.push(header);
+          }
+        }
+        return normalized;
+      }
+      if (typeof headers === "object" && hasSafeIterator(headers)) {
+        const normalized = [];
+        for (const header of headers) {
+          if (Array.isArray(header) && header.length === 2) {
+            normalized.push(header[0], header[1]);
+          } else {
+            normalized.push(header);
+          }
+        }
+        return normalized;
+      }
+      return headers;
+    }
+    function hasHostHeader(headers) {
+      if (headers == null) {
+        return false;
+      }
+      if (Array.isArray(headers)) {
+        if (headers.length === 0) {
+          return false;
+        }
+        for (let i = 0; i < headers.length; i += 2) {
+          if (isHostHeader(headers[i])) {
+            return true;
+          }
+        }
+        return false;
+      }
+      if (typeof headers === "object") {
+        for (const key in headers) {
+          if (isHostHeader(key)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+    function withHostHeader(host, headers) {
+      const normalizedHeaders = normalizeHeaders(headers);
+      if (hasHostHeader(normalizedHeaders)) {
+        return normalizedHeaders;
+      }
+      if (Array.isArray(normalizedHeaders)) {
+        return ["host", host, ...normalizedHeaders];
+      }
+      if (normalizedHeaders && typeof normalizedHeaders === "object") {
+        return {
+          host,
+          ...normalizedHeaders
+        };
+      }
+      return { host };
+    }
     var DNSStorage = class {
       #maxItems = 0;
       #records = /* @__PURE__ */ new Map();
@@ -14388,7 +15220,8 @@ var require_dns = __commonJS({
               }
               const dispatchOpts = {
                 ...this.#opts,
-                origin: `${this.#origin.protocol}//${ip.family === 6 ? `[${ip.address}]` : ip.address}${port}`
+                origin: `${this.#origin.protocol}//${ip.family === 6 ? `[${ip.address}]` : ip.address}${port}`,
+                headers: withHostHeader(this.#origin.host, this.#opts.headers)
               };
               this.#dispatch(dispatchOpts, this);
               return;
@@ -14463,10 +15296,7 @@ var require_dns = __commonJS({
               servername: origin.hostname,
               // For SNI on TLS
               origin: newOrigin.origin,
-              headers: {
-                host: origin.host,
-                ...origDispatchOpts.headers
-              }
+              headers: withHostHeader(origin.host, origDispatchOpts.headers)
             };
             dispatch(
               dispatchOpts,
@@ -14489,7 +15319,8 @@ var require_cache = __commonJS({
     "use strict";
     var {
       safeHTTPMethods,
-      pathHasQueryOrFragment
+      pathHasQueryOrFragment,
+      hasSafeIterator
     } = require_util();
     var { serializePathWithQuery } = require_util();
     function makeCacheKey(opts) {
@@ -14511,22 +15342,23 @@ var require_cache = __commonJS({
       let headers;
       if (opts.headers == null) {
         headers = {};
-      } else if (typeof opts.headers[Symbol.iterator] === "function") {
-        headers = {};
-        for (const x of opts.headers) {
-          if (!Array.isArray(x)) {
-            throw new Error("opts.headers is not a valid header map");
-          }
-          const [key, val] = x;
-          if (typeof key !== "string" || typeof val !== "string") {
-            throw new Error("opts.headers is not a valid header map");
-          }
-          headers[key.toLowerCase()] = val;
-        }
       } else if (typeof opts.headers === "object") {
         headers = {};
-        for (const key of Object.keys(opts.headers)) {
-          headers[key.toLowerCase()] = opts.headers[key];
+        if (hasSafeIterator(opts.headers)) {
+          for (const x of opts.headers) {
+            if (!Array.isArray(x)) {
+              throw new Error("opts.headers is not a valid header map");
+            }
+            const [key, val] = x;
+            if (typeof key !== "string" || typeof val !== "string") {
+              throw new Error("opts.headers is not a valid header map");
+            }
+            headers[key.toLowerCase()] = val;
+          }
+        } else {
+          for (const key of Object.keys(opts.headers)) {
+            headers[key.toLowerCase()] = opts.headers[key];
+          }
         }
       } else {
         throw new Error("opts.headers is not an object");
@@ -16437,19 +17269,21 @@ var require_decompress = __commonJS({
 var require_deduplication_handler = __commonJS({
   "node_modules/undici/lib/handler/deduplication-handler.js"(exports2, module2) {
     "use strict";
+    var { RequestAbortedError } = require_errors();
+    var DEFAULT_MAX_BUFFER_SIZE = 5 * 1024 * 1024;
     var DeduplicationHandler = class {
       /**
        * @type {DispatchHandler}
        */
       #primaryHandler;
       /**
-       * @type {DispatchHandler[]}
+       * @type {WaitingHandler[]}
        */
       #waitingHandlers = [];
       /**
-       * @type {Buffer[]}
+       * @type {number}
        */
-      #chunks = [];
+      #maxBufferSize = DEFAULT_MAX_BUFFER_SIZE;
       /**
        * @type {number}
        */
@@ -16467,6 +17301,18 @@ var require_deduplication_handler = __commonJS({
        */
       #aborted = false;
       /**
+       * @type {boolean}
+       */
+      #responseStarted = false;
+      /**
+       * @type {boolean}
+       */
+      #responseDataStarted = false;
+      /**
+       * @type {boolean}
+       */
+      #completed = false;
+      /**
        * @type {import('../../types/dispatcher.d.ts').default.DispatchController | null}
        */
       #controller = null;
@@ -16477,20 +17323,51 @@ var require_deduplication_handler = __commonJS({
       /**
        * @param {DispatchHandler} primaryHandler The primary handler
        * @param {() => void} onComplete Callback when request completes
+       * @param {number} [maxBufferSize] Maximum paused buffer size per waiting handler
        */
-      constructor(primaryHandler, onComplete) {
+      constructor(primaryHandler, onComplete, maxBufferSize = DEFAULT_MAX_BUFFER_SIZE) {
         this.#primaryHandler = primaryHandler;
         this.#onComplete = onComplete;
+        this.#maxBufferSize = maxBufferSize;
       }
       /**
-       * Add a waiting handler that will receive the buffered response
+       * Add a waiting handler that will receive response events.
+       * Returns false if deduplication can no longer safely attach this handler.
+       *
        * @param {DispatchHandler} handler
+       * @returns {boolean}
        */
       addWaitingHandler(handler) {
-        this.#waitingHandlers.push(handler);
+        if (this.#completed || this.#responseDataStarted) {
+          return false;
+        }
+        const waitingHandler = this.#createWaitingHandler(handler);
+        const waitingController = waitingHandler.controller;
+        try {
+          handler.onRequestStart?.(waitingController, null);
+          if (waitingController.aborted) {
+            waitingHandler.done = true;
+            return true;
+          }
+          if (this.#responseStarted) {
+            handler.onResponseStart?.(
+              waitingController,
+              this.#statusCode,
+              this.#headers,
+              this.#statusMessage
+            );
+          }
+        } catch {
+          waitingHandler.done = true;
+          return true;
+        }
+        if (!waitingController.aborted) {
+          this.#waitingHandlers.push(waitingHandler);
+        }
+        return true;
       }
       /**
-       * @param {() => void} abort
+       * @param {import('../../types/dispatcher.d.ts').default.DispatchController} controller
        * @param {any} context
        */
       onRequestStart(controller, context2) {
@@ -16513,26 +17390,95 @@ var require_deduplication_handler = __commonJS({
        * @param {string} statusMessage
        */
       onResponseStart(controller, statusCode, headers, statusMessage) {
+        this.#responseStarted = true;
         this.#statusCode = statusCode;
         this.#headers = headers;
         this.#statusMessage = statusMessage;
         this.#primaryHandler.onResponseStart?.(controller, statusCode, headers, statusMessage);
+        for (const waitingHandler of this.#waitingHandlers) {
+          const { handler, controller: waitingController } = waitingHandler;
+          if (waitingHandler.done || waitingController.aborted) {
+            waitingHandler.done = true;
+            continue;
+          }
+          try {
+            handler.onResponseStart?.(
+              waitingController,
+              statusCode,
+              headers,
+              statusMessage
+            );
+          } catch {
+          }
+          if (waitingController.aborted) {
+            waitingHandler.done = true;
+          }
+        }
+        this.#pruneDoneWaitingHandlers();
       }
       /**
        * @param {import('../../types/dispatcher.d.ts').default.DispatchController} controller
        * @param {Buffer} chunk
        */
       onResponseData(controller, chunk) {
-        this.#chunks.push(Buffer.from(chunk));
+        if (this.#aborted || this.#completed) {
+          return;
+        }
+        this.#responseDataStarted = true;
         this.#primaryHandler.onResponseData?.(controller, chunk);
+        for (const waitingHandler of this.#waitingHandlers) {
+          const { handler, controller: waitingController } = waitingHandler;
+          if (waitingHandler.done || waitingController.aborted) {
+            waitingHandler.done = true;
+            continue;
+          }
+          if (waitingController.paused) {
+            this.#bufferWaitingChunk(waitingHandler, chunk);
+            continue;
+          }
+          try {
+            handler.onResponseData?.(waitingController, chunk);
+          } catch {
+          }
+          if (waitingController.aborted) {
+            waitingHandler.done = true;
+            waitingHandler.bufferedChunks = [];
+            waitingHandler.bufferedBytes = 0;
+          }
+        }
+        this.#pruneDoneWaitingHandlers();
       }
       /**
        * @param {import('../../types/dispatcher.d.ts').default.DispatchController} controller
        * @param {object} trailers
        */
       onResponseEnd(controller, trailers) {
+        if (this.#aborted || this.#completed) {
+          return;
+        }
+        this.#completed = true;
         this.#primaryHandler.onResponseEnd?.(controller, trailers);
-        this.#notifyWaitingHandlers();
+        for (const waitingHandler of this.#waitingHandlers) {
+          if (waitingHandler.done || waitingHandler.controller.aborted) {
+            waitingHandler.done = true;
+            continue;
+          }
+          this.#flushWaitingHandler(waitingHandler);
+          if (waitingHandler.done || waitingHandler.controller.aborted) {
+            waitingHandler.done = true;
+            continue;
+          }
+          if (waitingHandler.controller.paused && waitingHandler.bufferedChunks.length > 0) {
+            waitingHandler.pendingTrailers = trailers;
+            continue;
+          }
+          try {
+            waitingHandler.handler.onResponseEnd?.(waitingHandler.controller, trailers);
+          } catch {
+          }
+          waitingHandler.done = true;
+        }
+        this.#pruneDoneWaitingHandlers();
         this.#onComplete?.();
       }
       /**
@@ -16540,89 +17486,138 @@ var require_deduplication_handler = __commonJS({
        * @param {Error} err
        */
       onResponseError(controller, err) {
+        if (this.#completed) {
+          return;
+        }
         this.#aborted = true;
+        this.#completed = true;
         this.#primaryHandler.onResponseError?.(controller, err);
-        this.#notifyWaitingHandlersError(err);
+        for (const waitingHandler of this.#waitingHandlers) {
+          this.#errorWaitingHandler(waitingHandler, err);
+        }
+        this.#waitingHandlers = [];
         this.#onComplete?.();
       }
       /**
-       * Notify all waiting handlers with the buffered response
+       * @param {DispatchHandler} handler
+       * @returns {WaitingHandler}
        */
-      #notifyWaitingHandlers() {
-        const body = Buffer.concat(this.#chunks);
-        for (const handler of this.#waitingHandlers) {
-          const waitingController = {
-            resume() {
-            },
-            pause() {
-            },
-            get paused() {
-              return false;
-            },
-            get aborted() {
-              return false;
-            },
-            get reason() {
-              return null;
-            },
-            abort() {
+      #createWaitingHandler(handler) {
+        const waitingHandler = {
+          handler,
+          controller: null,
+          bufferedChunks: [],
+          bufferedBytes: 0,
+          pendingTrailers: null,
+          done: false
+        };
+        const state3 = {
+          aborted: false,
+          paused: false,
+          reason: null
+        };
+        waitingHandler.controller = {
+          resume: () => {
+            if (state3.aborted) {
+              return;
             }
-          };
-          try {
-            handler.onRequestStart?.(waitingController, null);
-            if (waitingController.aborted) {
-              continue;
+            state3.paused = false;
+            this.#flushWaitingHandler(waitingHandler);
+            if (this.#completed && waitingHandler.pendingTrailers && waitingHandler.bufferedChunks.length === 0 && !state3.paused && !state3.aborted) {
+              try {
+                waitingHandler.handler.onResponseEnd?.(waitingHandler.controller, waitingHandler.pendingTrailers);
+              } catch {
+              }
+              waitingHandler.pendingTrailers = null;
+              waitingHandler.done = true;
             }
-            handler.onResponseStart?.(
-              waitingController,
-              this.#statusCode,
-              this.#headers,
-              this.#statusMessage
-            );
-            if (waitingController.aborted) {
-              continue;
+            this.#pruneDoneWaitingHandlers();
+          },
+          pause: () => {
+            if (!state3.aborted) {
+              state3.paused = true;
             }
-            if (body.length > 0) {
-              handler.onResponseData?.(waitingController, body);
-            }
-            handler.onResponseEnd?.(waitingController, {});
-          } catch {
+          },
+          get paused() {
+            return state3.paused;
+          },
+          get aborted() {
+            return state3.aborted;
+          },
+          get reason() {
+            return state3.reason;
+          },
+          abort: (reason) => {
+            state3.aborted = true;
+            state3.reason = reason ?? null;
+            waitingHandler.done = true;
+            waitingHandler.pendingTrailers = null;
+            waitingHandler.bufferedChunks = [];
+            waitingHandler.bufferedBytes = 0;
           }
-        }
-        this.#waitingHandlers = [];
-        this.#chunks = [];
+        };
+        return waitingHandler;
       }
       /**
-       * Notify all waiting handlers of an error
-       * @param {Error} err
+       * @param {WaitingHandler} waitingHandler
+       * @param {Buffer} chunk
        */
-      #notifyWaitingHandlersError(err) {
-        for (const handler of this.#waitingHandlers) {
-          const waitingController = {
-            resume() {
-            },
-            pause() {
-            },
-            get paused() {
-              return false;
-            },
-            get aborted() {
-              return true;
-            },
-            get reason() {
-              return err;
-            },
-            abort() {
-            }
-          };
+      #bufferWaitingChunk(waitingHandler, chunk) {
+        if (waitingHandler.done || waitingHandler.controller.aborted) {
+          waitingHandler.done = true;
+          waitingHandler.bufferedChunks = [];
+          waitingHandler.bufferedBytes = 0;
+          return;
+        }
+        const bufferedChunk = Buffer.from(chunk);
+        waitingHandler.bufferedChunks.push(bufferedChunk);
+        waitingHandler.bufferedBytes += bufferedChunk.length;
+        if (waitingHandler.bufferedBytes > this.#maxBufferSize) {
+          const err = new RequestAbortedError(`Deduplicated waiting handler exceeded maxBufferSize (${this.#maxBufferSize} bytes) while paused`);
+          this.#errorWaitingHandler(waitingHandler, err);
+        }
+      }
+      /**
+       * @param {WaitingHandler} waitingHandler
+       */
+      #flushWaitingHandler(waitingHandler) {
+        const { handler, controller } = waitingHandler;
+        while (!waitingHandler.done && !controller.aborted && !controller.paused && waitingHandler.bufferedChunks.length > 0) {
+          const bufferedChunk = waitingHandler.bufferedChunks.shift();
+          waitingHandler.bufferedBytes -= bufferedChunk.length;
           try {
-            handler.onRequestStart?.(waitingController, null);
-            handler.onResponseError?.(waitingController, err);
+            handler.onResponseData?.(controller, bufferedChunk);
           } catch {
           }
+          if (controller.aborted) {
+            waitingHandler.done = true;
+            waitingHandler.pendingTrailers = null;
+            waitingHandler.bufferedChunks = [];
+            waitingHandler.bufferedBytes = 0;
+            break;
+          }
         }
-        this.#waitingHandlers = [];
-        this.#chunks = [];
+      }
+      /**
+       * @param {WaitingHandler} waitingHandler
+       * @param {Error} err
+       */
+      #errorWaitingHandler(waitingHandler, err) {
+        if (waitingHandler.done) {
+          return;
+        }
+        waitingHandler.done = true;
+        waitingHandler.pendingTrailers = null;
+        waitingHandler.bufferedChunks = [];
+        waitingHandler.bufferedBytes = 0;
+        try {
+          waitingHandler.controller.abort(err);
+          waitingHandler.handler.onResponseError?.(waitingHandler.controller, err);
+        } catch {
+        }
+      }
+      #pruneDoneWaitingHandlers() {
+        this.#waitingHandlers = this.#waitingHandlers.filter((waitingHandler) => waitingHandler.done === false);
       }
     };
     module2.exports = DeduplicationHandler;
@@ -16642,7 +17637,8 @@ var require_deduplicate = __commonJS({
       const {
         methods = ["GET"],
         skipHeaderNames = [],
-        excludeHeaderNames = []
+        excludeHeaderNames = [],
+        maxBufferSize = 5 * 1024 * 1024
       } = opts;
       if (typeof opts !== "object" || opts === null) {
         throw new TypeError(`expected type of opts to be an Object, got ${opts === null ? "null" : typeof opts}`);
@@ -16660,6 +17656,9 @@ var require_deduplicate = __commonJS({
       }
       if (!Array.isArray(excludeHeaderNames)) {
         throw new TypeError(`expected opts.excludeHeaderNames to be an array, got ${typeof excludeHeaderNames}`);
+      }
+      if (!Number.isFinite(maxBufferSize) || maxBufferSize <= 0) {
+        throw new TypeError(`expected opts.maxBufferSize to be a positive finite number, got ${maxBufferSize}`);
       }
       const skipHeaderNamesSet = new Set(skipHeaderNames.map((name3) => name3.toLowerCase()));
       const excludeHeaderNamesSet = new Set(excludeHeaderNames.map((name3) => name3.toLowerCase()));
@@ -16684,8 +17683,10 @@ var require_deduplicate = __commonJS({
           const dedupeKey = makeDeduplicationKey(cacheKey, excludeHeaderNamesSet);
           const pendingHandler = pendingRequests.get(dedupeKey);
           if (pendingHandler) {
-            pendingHandler.addWaitingHandler(handler);
-            return true;
+            if (pendingHandler.addWaitingHandler(handler)) {
+              return true;
+            }
+            return dispatch(opts2, handler);
           }
           const deduplicationHandler = new DeduplicationHandler(
             handler,
@@ -16694,7 +17695,8 @@ var require_deduplicate = __commonJS({
               if (pendingRequestsChannel.hasSubscribers) {
                 pendingRequestsChannel.publish({ size: pendingRequests.size, key: dedupeKey, type: "removed" });
               }
-            }
+            },
+            maxBufferSize
           );
           pendingRequests.set(dedupeKey, deduplicationHandler);
           if (pendingRequestsChannel.hasSubscribers) {
@@ -17331,7 +18333,7 @@ var require_headers = __commonJS({
         }
       }
     };
-    var Headers2 = class _Headers {
+    var Headers3 = class _Headers {
       #guard;
       /**
        * @type {HeadersList}
@@ -17472,13 +18474,13 @@ var require_headers = __commonJS({
         target.#headersList = list;
       }
     };
-    var { getHeadersGuard, setHeadersGuard, getHeadersList, setHeadersList } = Headers2;
-    Reflect.deleteProperty(Headers2, "getHeadersGuard");
-    Reflect.deleteProperty(Headers2, "setHeadersGuard");
-    Reflect.deleteProperty(Headers2, "getHeadersList");
-    Reflect.deleteProperty(Headers2, "setHeadersList");
-    iteratorMixin("Headers", Headers2, headersListSortAndCombine, 0, 1);
-    Object.defineProperties(Headers2.prototype, {
+    var { getHeadersGuard, setHeadersGuard, getHeadersList, setHeadersList } = Headers3;
+    Reflect.deleteProperty(Headers3, "getHeadersGuard");
+    Reflect.deleteProperty(Headers3, "setHeadersGuard");
+    Reflect.deleteProperty(Headers3, "getHeadersList");
+    Reflect.deleteProperty(Headers3, "setHeadersList");
+    iteratorMixin("Headers", Headers3, headersListSortAndCombine, 0, 1);
+    Object.defineProperties(Headers3.prototype, {
       append: kEnumerableProperty,
       delete: kEnumerableProperty,
       get: kEnumerableProperty,
@@ -17496,7 +18498,7 @@ var require_headers = __commonJS({
     webidl.converters.HeadersInit = function(V, prefix, argument) {
       if (webidl.util.Type(V) === webidl.util.Types.OBJECT) {
         const iterator = Reflect.get(V, Symbol.iterator);
-        if (!util3.types.isProxy(V) && iterator === Headers2.prototype.entries) {
+        if (!util3.types.isProxy(V) && iterator === Headers3.prototype.entries) {
           try {
             return getHeadersList(V).entriesList;
           } catch {
@@ -17517,7 +18519,7 @@ var require_headers = __commonJS({
       fill,
       // for test.
       compareHeaderName,
-      Headers: Headers2,
+      Headers: Headers3,
       HeadersList,
       getHeadersGuard,
       setHeadersGuard,
@@ -17531,7 +18533,7 @@ var require_headers = __commonJS({
 var require_response = __commonJS({
   "node_modules/undici/lib/web/fetch/response.js"(exports2, module2) {
     "use strict";
-    var { Headers: Headers2, HeadersList, fill, getHeadersGuard, setHeadersGuard, setHeadersList } = require_headers();
+    var { Headers: Headers3, HeadersList, fill, getHeadersGuard, setHeadersGuard, setHeadersList } = require_headers();
     var { extractBody, cloneBody, mixinBody, streamRegistry, bodyUnusable } = require_body();
     var util3 = require_util();
     var nodeUtil = require("util");
@@ -17607,7 +18609,7 @@ var require_response = __commonJS({
         }
         init = webidl.converters.ResponseInit(init);
         this.#state = makeResponse({});
-        this.#headers = new Headers2(kConstruct);
+        this.#headers = new Headers3(kConstruct);
         setHeadersGuard(this.#headers, "response");
         setHeadersList(this.#headers, this.#state.headersList);
         let bodyWithType = null;
@@ -17882,7 +18884,7 @@ var require_response = __commonJS({
     function fromInnerResponse(innerResponse, guard) {
       const response = new Response(kConstruct);
       setResponseState(response, innerResponse);
-      const headers = new Headers2(kConstruct);
+      const headers = new Headers3(kConstruct);
       setResponseHeaders(response, headers);
       setHeadersList(headers, innerResponse.headersList);
       setHeadersGuard(headers, guard);
@@ -17954,7 +18956,7 @@ var require_request2 = __commonJS({
   "node_modules/undici/lib/web/fetch/request.js"(exports2, module2) {
     "use strict";
     var { extractBody, mixinBody, cloneBody, bodyUnusable } = require_body();
-    var { Headers: Headers2, fill: fillHeaders, HeadersList, setHeadersGuard, getHeadersGuard, setHeadersList, getHeadersList } = require_headers();
+    var { Headers: Headers3, fill: fillHeaders, HeadersList, setHeadersGuard, getHeadersGuard, setHeadersList, getHeadersList } = require_headers();
     var util3 = require_util();
     var nodeUtil = require("util");
     var {
@@ -18223,7 +19225,7 @@ var require_request2 = __commonJS({
             requestFinalizer.register(ac, { signal, abort }, abort);
           }
         }
-        this.#headers = new Headers2(kConstruct);
+        this.#headers = new Headers3(kConstruct);
         setHeadersList(this.#headers, request5.headersList);
         setHeadersGuard(this.#headers, "request");
         if (mode === "no-cors") {
@@ -18564,7 +19566,7 @@ var require_request2 = __commonJS({
       setRequestState(request5, innerRequest);
       setRequestDispatcher(request5, dispatcher);
       setRequestSignal(request5, signal);
-      const headers = new Headers2(kConstruct);
+      const headers = new Headers3(kConstruct);
       setRequestHeaders(request5, headers);
       setHeadersList(headers, innerRequest.headersList);
       setHeadersGuard(headers, guard);
@@ -18950,7 +19952,7 @@ var require_fetch = __commonJS({
     function handleFetchDone(response) {
       finalizeAndReportTiming(response, "fetch");
     }
-    function fetch(input, init = void 0) {
+    function fetch2(input, init = void 0) {
       webidl.argumentLengthCheck(arguments, 1, "globalThis.fetch");
       let p = createDeferredPromise();
       let requestObject;
@@ -19002,8 +20004,11 @@ var require_fetch = __commonJS({
         request: request5,
         processResponseEndOfBody: handleFetchDone,
         processResponse,
-        dispatcher: getRequestDispatcher(requestObject)
+        dispatcher: getRequestDispatcher(requestObject),
         // undici
+        // Keep requestObject alive to prevent its AbortController from being GC'd
+        // See https://github.com/nodejs/undici/issues/4627
+        requestObject
       });
       return p.promise;
     }
@@ -19071,8 +20076,10 @@ var require_fetch = __commonJS({
       processResponseEndOfBody,
       processResponseConsumeBody,
       useParallelQueue = false,
-      dispatcher = getGlobalDispatcher()
+      dispatcher = getGlobalDispatcher(),
       // undici
+      requestObject = null
+      // Keep alive to prevent AbortController GC, see #4627
     }) {
       assert(dispatcher);
       let taskDestination = null;
@@ -19095,7 +20102,9 @@ var require_fetch = __commonJS({
         processResponseConsumeBody,
         processResponseEndOfBody,
         taskDestination,
-        crossOriginIsolatedCapability
+        crossOriginIsolatedCapability,
+        // Keep requestObject alive to prevent its AbortController from being GC'd
+        requestObject
       };
       assert(!request5.body || request5.body.stream);
       if (request5.window === "client") {
@@ -19795,7 +20804,7 @@ var require_fetch = __commonJS({
         const agent = fetchParams.controller.dispatcher;
         return new Promise((resolve, reject) => agent.dispatch(
           {
-            path: url.pathname + url.search,
+            path: url.href.slice(url.origin.length, url.hash.length ? -url.hash.length : void 0),
             origin: url.origin,
             method: request5.method,
             body: agent.isMockActive ? request5.body && (request5.body.source || request5.body.stream) : body,
@@ -19955,7 +20964,7 @@ var require_fetch = __commonJS({
       }
     }
     module2.exports = {
-      fetch,
+      fetch: fetch2,
       Fetch,
       fetching,
       finalizeAndReportTiming
@@ -20983,8 +21992,8 @@ var require_cookies = __commonJS({
     var { parseSetCookie } = require_parse();
     var { stringify: stringify2 } = require_util4();
     var { webidl } = require_webidl();
-    var { Headers: Headers2 } = require_headers();
-    var brandChecks = webidl.brandCheckMultiple([Headers2, globalThis.Headers].filter(Boolean));
+    var { Headers: Headers3 } = require_headers();
+    var brandChecks = webidl.brandCheckMultiple([Headers3, globalThis.Headers].filter(Boolean));
     function getCookies(headers) {
       webidl.argumentLengthCheck(arguments, 1, "getCookies");
       brandChecks(headers);
@@ -21532,13 +22541,17 @@ var require_util5 = __commonJS({
       return extensionList;
     }
     function isValidClientWindowBits(value) {
+      if (value.length === 0) {
+        return false;
+      }
       for (let i = 0; i < value.length; i++) {
         const byte = value.charCodeAt(i);
         if (byte < 48 || byte > 57) {
           return false;
         }
       }
-      return true;
+      const num = Number.parseInt(value, 10);
+      return num >= 8 && num <= 15;
     }
     function getURLRecord(url, baseURL) {
       let urlRecord;
@@ -21721,7 +22734,7 @@ var require_connection = __commonJS({
     var { parseExtensions, isClosed, isClosing, isEstablished, isConnecting, validateCloseCodeAndReason } = require_util5();
     var { makeRequest } = require_request2();
     var { fetching } = require_fetch();
-    var { Headers: Headers2, getHeadersList } = require_headers();
+    var { Headers: Headers3, getHeadersList } = require_headers();
     var { getDecodeSplit } = require_util2();
     var { WebsocketFrameSend } = require_frame();
     var assert = require("assert");
@@ -21743,7 +22756,7 @@ var require_connection = __commonJS({
         useURLCredentials: true
       });
       if (options.headers) {
-        const headersList = getHeadersList(new Headers2(options.headers));
+        const headersList = getHeadersList(new Headers3(options.headers));
         request5.headersList = headersList;
       }
       const keyValue = crypto5.randomBytes(16).toString("base64");
@@ -21875,18 +22888,35 @@ var require_permessage_deflate = __commonJS({
     "use strict";
     var { createInflateRaw, Z_DEFAULT_WINDOWBITS } = require("zlib");
     var { isValidClientWindowBits } = require_util5();
+    var { MessageSizeExceededError } = require_errors();
     var tail = Buffer.from([0, 0, 255, 255]);
     var kBuffer = /* @__PURE__ */ Symbol("kBuffer");
     var kLength = /* @__PURE__ */ Symbol("kLength");
+    var kDefaultMaxDecompressedSize = 4 * 1024 * 1024;
     var PerMessageDeflate = class {
       /** @type {import('node:zlib').InflateRaw} */
       #inflate;
       #options = {};
-      constructor(extensions) {
+      /** @type {number} */
+      #maxDecompressedSize;
+      /** @type {boolean} */
+      #aborted = false;
+      /** @type {Function|null} */
+      #currentCallback = null;
+      /**
+       * @param {Map<string, string>} extensions
+       * @param {{ maxDecompressedMessageSize?: number }} [options]
+       */
+      constructor(extensions, options = {}) {
         this.#options.serverNoContextTakeover = extensions.has("server_no_context_takeover");
         this.#options.serverMaxWindowBits = extensions.get("server_max_window_bits");
+        this.#maxDecompressedSize = options.maxDecompressedMessageSize ?? kDefaultMaxDecompressedSize;
       }
       decompress(chunk, fin, callback) {
+        if (this.#aborted) {
+          callback(new MessageSizeExceededError());
+          return;
+        }
         if (!this.#inflate) {
           let windowBits = Z_DEFAULT_WINDOWBITS;
           if (this.#options.serverMaxWindowBits) {
@@ -21896,26 +22926,51 @@ var require_permessage_deflate = __commonJS({
             }
             windowBits = Number.parseInt(this.#options.serverMaxWindowBits);
           }
-          this.#inflate = createInflateRaw({ windowBits });
+          try {
+            this.#inflate = createInflateRaw({ windowBits });
+          } catch (err) {
+            callback(err);
+            return;
+          }
           this.#inflate[kBuffer] = [];
           this.#inflate[kLength] = 0;
           this.#inflate.on("data", (data) => {
-            this.#inflate[kBuffer].push(data);
+            if (this.#aborted) {
+              return;
+            }
             this.#inflate[kLength] += data.length;
+            if (this.#inflate[kLength] > this.#maxDecompressedSize) {
+              this.#aborted = true;
+              this.#inflate.removeAllListeners();
+              this.#inflate.destroy();
+              this.#inflate = null;
+              if (this.#currentCallback) {
+                const cb = this.#currentCallback;
+                this.#currentCallback = null;
+                cb(new MessageSizeExceededError());
+              }
+              return;
+            }
+            this.#inflate[kBuffer].push(data);
           });
           this.#inflate.on("error", (err) => {
             this.#inflate = null;
             callback(err);
           });
         }
+        this.#currentCallback = callback;
         this.#inflate.write(chunk);
         if (fin) {
           this.#inflate.write(tail);
         }
         this.#inflate.flush(() => {
+          if (this.#aborted || !this.#inflate) {
+            return;
+          }
           const full = Buffer.concat(this.#inflate[kBuffer], this.#inflate[kLength]);
           this.#inflate[kBuffer].length = 0;
           this.#inflate[kLength] = 0;
+          this.#currentCallback = null;
           callback(null, full);
         });
       }
@@ -21943,6 +22998,7 @@ var require_receiver = __commonJS({
     var { failWebsocketConnection } = require_connection();
     var { WebsocketFrameSend } = require_frame();
     var { PerMessageDeflate } = require_permessage_deflate();
+    var { MessageSizeExceededError } = require_errors();
     var ByteParser = class extends Writable {
       #buffers = [];
       #fragmentsBytes = 0;
@@ -21955,12 +23011,20 @@ var require_receiver = __commonJS({
       #extensions;
       /** @type {import('./websocket').Handler} */
       #handler;
-      constructor(handler, extensions) {
+      /** @type {{ maxDecompressedMessageSize?: number }} */
+      #options;
+      /**
+       * @param {import('./websocket').Handler} handler
+       * @param {Map<string, string>|null} extensions
+       * @param {{ maxDecompressedMessageSize?: number }} [options]
+       */
+      constructor(handler, extensions, options = {}) {
         super();
         this.#handler = handler;
         this.#extensions = extensions == null ? /* @__PURE__ */ new Map() : extensions;
+        this.#options = options;
         if (this.#extensions.has("permessage-deflate")) {
-          this.#extensions.set("permessage-deflate", new PerMessageDeflate(extensions));
+          this.#extensions.set("permessage-deflate", new PerMessageDeflate(extensions, options));
         }
       }
       /**
@@ -22058,12 +23122,12 @@ var require_receiver = __commonJS({
             }
             const buffer = this.consume(8);
             const upper = buffer.readUInt32BE(0);
-            if (upper > 2 ** 31 - 1) {
+            const lower = buffer.readUInt32BE(4);
+            if (upper !== 0 || lower > 2 ** 31 - 1) {
               failWebsocketConnection(this.#handler, 1009, "Received payload length > 2^31 bytes.");
               return;
             }
-            const lower = buffer.readUInt32BE(4);
-            this.#info.payloadLength = (upper << 8) + lower;
+            this.#info.payloadLength = lower;
             this.#state = parserStates.READ_DATA;
           } else if (this.#state === parserStates.READ_DATA) {
             if (this.#byteOffset < this.#info.payloadLength) {
@@ -22083,7 +23147,8 @@ var require_receiver = __commonJS({
               } else {
                 this.#extensions.get("permessage-deflate").decompress(body, this.#info.fin, (error2, data) => {
                   if (error2) {
-                    failWebsocketConnection(this.#handler, 1007, error2.message);
+                    const code = error2 instanceof MessageSizeExceededError ? 1009 : 1007;
+                    failWebsocketConnection(this.#handler, code, error2.message);
                     return;
                   }
                   this.writeFragments(data);
@@ -22408,6 +23473,8 @@ var require_websocket = __commonJS({
       #binaryType;
       /** @type {import('./receiver').ByteParser} */
       #parser;
+      /** @type {{ maxDecompressedMessageSize?: number }} */
+      #options;
       /**
        * @param {string} url
        * @param {string|string[]} protocols
@@ -22432,6 +23499,9 @@ var require_websocket = __commonJS({
           throw new DOMException("Invalid Sec-WebSocket-Protocol value", "SyntaxError");
         }
         this.#url = new URL(urlRecord.href);
+        this.#options = {
+          maxDecompressedMessageSize: options.maxDecompressedMessageSize
+        };
         const client = environmentSettingsObject.settingsObject;
         this.#handler.controller = establishWebSocketConnection(
           urlRecord,
@@ -22604,7 +23674,7 @@ var require_websocket = __commonJS({
        */
       #onConnectionEstablished(response, parsedExtensions) {
         this.#handler.socket = response.socket;
-        const parser = new ByteParser(this.#handler, parsedExtensions);
+        const parser = new ByteParser(this.#handler, parsedExtensions, this.#options);
         parser.on("drain", () => this.#handler.onParserDrain());
         parser.on("error", (err) => this.#handler.onParserError(err));
         this.#parser = parser;
@@ -22772,6 +23842,19 @@ var require_websocket = __commonJS({
       {
         key: "headers",
         converter: webidl.nullableConverter(webidl.converters.HeadersInit)
+      },
+      {
+        key: "maxDecompressedMessageSize",
+        converter: webidl.nullableConverter((V) => {
+          V = webidl.converters["unsigned long long"](V);
+          if (V <= 0) {
+            throw webidl.errors.exception({
+              header: "WebSocket constructor",
+              message: "maxDecompressedMessageSize must be greater than 0"
+            });
+          }
+          return V;
+        })
       }
     ]);
     webidl.converters["DOMString or sequence<DOMString> or WebSocketInit"] = function(V) {
@@ -23770,6 +24853,7 @@ var require_undici = __commonJS({
     var RoundRobinPool = require_round_robin_pool();
     var Agent5 = require_agent();
     var ProxyAgent2 = require_proxy_agent();
+    var Socks5ProxyAgent = require_socks5_proxy_agent();
     var EnvHttpProxyAgent = require_env_http_proxy_agent();
     var RetryAgent = require_retry_agent();
     var H2CClient = require_h2c_client();
@@ -23796,6 +24880,7 @@ var require_undici = __commonJS({
     module2.exports.RoundRobinPool = RoundRobinPool;
     module2.exports.Agent = Agent5;
     module2.exports.ProxyAgent = ProxyAgent2;
+    module2.exports.Socks5ProxyAgent = Socks5ProxyAgent;
     module2.exports.EnvHttpProxyAgent = EnvHttpProxyAgent;
     module2.exports.RetryAgent = RetryAgent;
     module2.exports.H2CClient = H2CClient;
@@ -23884,7 +24969,7 @@ var require_undici = __commonJS({
       err.stack = stack ? `${stack}
 ${captureLines}` : capture.stack;
     }
-    module2.exports.fetch = function fetch(init, options = void 0) {
+    module2.exports.fetch = function fetch2(init, options = void 0) {
       return fetchImpl(init, options).catch((err) => {
         if (currentFilename) {
           appendFetchStackTrace(err, currentFilename);
@@ -24482,7 +25567,7 @@ var require_jwa = __commonJS({
         es: createECDSAVerifer,
         none: createNoneVerifier
       };
-      var match = algorithm.match(/^(RS|PS|ES|HS)(256|384|512)$|^(none)$/i);
+      var match = algorithm.match(/^(RS|PS|ES|HS)(256|384|512)$|^(none)$/);
       if (!match)
         throw typeError(MSG_INVALID_ALGORITHM, algorithm);
       var algo = (match[1] || match[3]).toLowerCase();
@@ -25045,8 +26130,8 @@ var require_re = __commonJS({
     createToken("NONNUMERICIDENTIFIER", `\\d*[a-zA-Z-]${LETTERDASHNUMBER}*`);
     createToken("MAINVERSION", `(${src[t.NUMERICIDENTIFIER]})\\.(${src[t.NUMERICIDENTIFIER]})\\.(${src[t.NUMERICIDENTIFIER]})`);
     createToken("MAINVERSIONLOOSE", `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.(${src[t.NUMERICIDENTIFIERLOOSE]})\\.(${src[t.NUMERICIDENTIFIERLOOSE]})`);
-    createToken("PRERELEASEIDENTIFIER", `(?:${src[t.NUMERICIDENTIFIER]}|${src[t.NONNUMERICIDENTIFIER]})`);
-    createToken("PRERELEASEIDENTIFIERLOOSE", `(?:${src[t.NUMERICIDENTIFIERLOOSE]}|${src[t.NONNUMERICIDENTIFIER]})`);
+    createToken("PRERELEASEIDENTIFIER", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIER]})`);
+    createToken("PRERELEASEIDENTIFIERLOOSE", `(?:${src[t.NONNUMERICIDENTIFIER]}|${src[t.NUMERICIDENTIFIERLOOSE]})`);
     createToken("PRERELEASE", `(?:-(${src[t.PRERELEASEIDENTIFIER]}(?:\\.${src[t.PRERELEASEIDENTIFIER]})*))`);
     createToken("PRERELEASELOOSE", `(?:-?(${src[t.PRERELEASEIDENTIFIERLOOSE]}(?:\\.${src[t.PRERELEASEIDENTIFIERLOOSE]})*))`);
     createToken("BUILDIDENTIFIER", `${LETTERDASHNUMBER}+`);
@@ -25114,6 +26199,9 @@ var require_identifiers = __commonJS({
     "use strict";
     var numeric = /^[0-9]+$/;
     var compareIdentifiers = (a, b) => {
+      if (typeof a === "number" && typeof b === "number") {
+        return a === b ? 0 : a < b ? -1 : 1;
+      }
       const anum = numeric.test(a);
       const bnum = numeric.test(b);
       if (anum && bnum) {
@@ -25136,7 +26224,7 @@ var require_semver = __commonJS({
     "use strict";
     var debug2 = require_debug();
     var { MAX_LENGTH, MAX_SAFE_INTEGER } = require_constants6();
-    var { safeRe: re, safeSrc: src, t } = require_re();
+    var { safeRe: re, t } = require_re();
     var parseOptions = require_parse_options();
     var { compareIdentifiers } = require_identifiers();
     var SemVer = class _SemVer {
@@ -25220,7 +26308,25 @@ var require_semver = __commonJS({
         if (!(other instanceof _SemVer)) {
           other = new _SemVer(other, this.options);
         }
-        return compareIdentifiers(this.major, other.major) || compareIdentifiers(this.minor, other.minor) || compareIdentifiers(this.patch, other.patch);
+        if (this.major < other.major) {
+          return -1;
+        }
+        if (this.major > other.major) {
+          return 1;
+        }
+        if (this.minor < other.minor) {
+          return -1;
+        }
+        if (this.minor > other.minor) {
+          return 1;
+        }
+        if (this.patch < other.patch) {
+          return -1;
+        }
+        if (this.patch > other.patch) {
+          return 1;
+        }
+        return 0;
       }
       comparePre(other) {
         if (!(other instanceof _SemVer)) {
@@ -25281,8 +26387,7 @@ var require_semver = __commonJS({
             throw new Error("invalid increment argument: identifier is empty");
           }
           if (identifier) {
-            const r = new RegExp(`^${this.options.loose ? src[t.PRERELEASELOOSE] : src[t.PRERELEASE]}$`);
-            const match = `-${identifier}`.match(r);
+            const match = `-${identifier}`.match(this.options.loose ? re[t.PRERELEASELOOSE] : re[t.PRERELEASE]);
             if (!match || match[1] !== identifier) {
               throw new Error(`invalid identifier: ${identifier}`);
             }
@@ -25982,6 +27087,7 @@ var require_range = __commonJS({
       return result;
     };
     var parseComparator = (comp, options) => {
+      comp = comp.replace(re[t.BUILD], "");
       debug2("comp", comp, options);
       comp = replaceCarets(comp, options);
       debug2("caret", comp);
@@ -28519,8 +29625,8 @@ var require_helpers = __commonJS({
     };
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.req = exports2.json = exports2.toBuffer = void 0;
-    var http5 = __importStar(require("http"));
-    var https4 = __importStar(require("https"));
+    var http4 = __importStar(require("http"));
+    var https3 = __importStar(require("https"));
     async function toBuffer(stream) {
       let length = 0;
       const chunks = [];
@@ -28545,7 +29651,7 @@ var require_helpers = __commonJS({
     exports2.json = json;
     function req(url, opts = {}) {
       const href = typeof url === "string" ? url : url.href;
-      const req2 = (href.startsWith("https:") ? https4 : http5).request(url, opts);
+      const req2 = (href.startsWith("https:") ? https3 : http4).request(url, opts);
       const promise = new Promise((resolve, reject) => {
         req2.once("response", resolve).once("error", reject).end();
       });
@@ -28593,11 +29699,11 @@ var require_dist = __commonJS({
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.Agent = void 0;
     var net = __importStar(require("net"));
-    var http5 = __importStar(require("http"));
+    var http4 = __importStar(require("http"));
     var https_1 = require("https");
     __exportStar(require_helpers(), exports2);
     var INTERNAL = /* @__PURE__ */ Symbol("AgentBaseInternalState");
-    var Agent5 = class extends http5.Agent {
+    var Agent5 = class extends http4.Agent {
       constructor(opts) {
         super(opts);
         this[INTERNAL] = {};
@@ -28669,7 +29775,7 @@ var require_dist = __commonJS({
         const fakeSocket = this.incrementSockets(name3);
         Promise.resolve().then(() => this.connect(req, connectOpts)).then((socket) => {
           this.decrementSockets(name3, fakeSocket);
-          if (socket instanceof http5.Agent) {
+          if (socket instanceof http4.Agent) {
             try {
               return socket.addRequest(req, connectOpts);
             } catch (err) {
@@ -29762,11 +30868,11 @@ var HttpCodes;
   HttpCodes2[HttpCodes2["ServiceUnavailable"] = 503] = "ServiceUnavailable";
   HttpCodes2[HttpCodes2["GatewayTimeout"] = 504] = "GatewayTimeout";
 })(HttpCodes || (HttpCodes = {}));
-var Headers;
-(function(Headers2) {
-  Headers2["Accept"] = "accept";
-  Headers2["ContentType"] = "content-type";
-})(Headers || (Headers = {}));
+var Headers2;
+(function(Headers3) {
+  Headers3["Accept"] = "accept";
+  Headers3["ContentType"] = "content-type";
+})(Headers2 || (Headers2 = {}));
 var MediaTypes;
 (function(MediaTypes2) {
   MediaTypes2["ApplicationJson"] = "application/json";
@@ -30132,7 +31238,7 @@ function error(message, properties = {}) {
 }
 
 // node_modules/@azure/identity/dist/esm/constants.js
-var SDK_VERSION = `4.13.0`;
+var SDK_VERSION = `4.13.1`;
 var DeveloperSignOnClientId = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
 var DefaultTenantId = "common";
 var AzureAuthorityHosts;
@@ -30785,37 +31891,28 @@ var dist_exports = {};
 __export(dist_exports, {
   AuthError: () => AuthError,
   AuthErrorCodes: () => AuthErrorCodes_exports,
-  AuthErrorMessage: () => AuthErrorMessage,
   AzureCloudInstance: () => AzureCloudInstance,
-  ClientApplication: () => ClientApplication,
   ClientAssertion: () => ClientAssertion,
   ClientAuthError: () => ClientAuthError,
   ClientAuthErrorCodes: () => ClientAuthErrorCodes_exports,
-  ClientAuthErrorMessage: () => ClientAuthErrorMessage,
   ClientConfigurationError: () => ClientConfigurationError,
   ClientConfigurationErrorCodes: () => ClientConfigurationErrorCodes_exports,
-  ClientConfigurationErrorMessage: () => ClientConfigurationErrorMessage,
-  ClientCredentialClient: () => ClientCredentialClient,
   ConfidentialClientApplication: () => ConfidentialClientApplication,
   CryptoProvider: () => CryptoProvider,
-  DeviceCodeClient: () => DeviceCodeClient,
   DistributedCachePlugin: () => DistributedCachePlugin,
   InteractionRequiredAuthError: () => InteractionRequiredAuthError,
   InteractionRequiredAuthErrorCodes: () => InteractionRequiredAuthErrorCodes_exports,
-  InteractionRequiredAuthErrorMessage: () => InteractionRequiredAuthErrorMessage,
   LogLevel: () => LogLevel,
   Logger: () => Logger,
   ManagedIdentityApplication: () => ManagedIdentityApplication,
   ManagedIdentitySourceNames: () => ManagedIdentitySourceNames,
-  OnBehalfOfClient: () => OnBehalfOfClient,
-  PromptValue: () => PromptValue,
+  PromptValue: () => PromptValue2,
   ProtocolMode: () => ProtocolMode,
   PublicClientApplication: () => PublicClientApplication,
-  ResponseMode: () => ResponseMode,
+  ResponseMode: () => ResponseMode2,
   ServerError: () => ServerError,
   TokenCache: () => TokenCache,
   TokenCacheContext: () => TokenCacheContext,
-  UsernamePasswordClient: () => UsernamePasswordClient,
   internals: () => internals_exports,
   version: () => version2
 });
@@ -30903,9 +32000,8 @@ var Serializer = class {
         refresh_on: atEntity.refreshOn,
         key_id: atEntity.keyId,
         token_type: atEntity.tokenType,
-        requestedClaims: atEntity.requestedClaims,
-        requestedClaimsHash: atEntity.requestedClaimsHash,
-        userAssertionHash: atEntity.userAssertionHash
+        userAssertionHash: atEntity.userAssertionHash,
+        resource: atEntity.resource
       };
     });
     return accessTokens;
@@ -30962,88 +32058,226 @@ var Serializer = class {
   }
 };
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/Constants.mjs
-var Constants = {
-  LIBRARY_NAME: "MSAL.JS",
-  SKU: "msal.js.common",
-  // Prefix for all library cache entries
-  CACHE_PREFIX: "msal",
-  // default authority
-  DEFAULT_AUTHORITY: "https://login.microsoftonline.com/common/",
-  DEFAULT_AUTHORITY_HOST: "login.microsoftonline.com",
-  DEFAULT_COMMON_TENANT: "common",
-  // ADFS String
-  ADFS: "adfs",
-  DSTS: "dstsv2",
-  // Default AAD Instance Discovery Endpoint
-  AAD_INSTANCE_DISCOVERY_ENDPT: "https://login.microsoftonline.com/common/discovery/instance?api-version=1.1&authorization_endpoint=",
-  // CIAM URL
-  CIAM_AUTH_URL: ".ciamlogin.com",
-  AAD_TENANT_DOMAIN_SUFFIX: ".onmicrosoft.com",
-  // Resource delimiter - used for certain cache entries
-  RESOURCE_DELIM: "|",
-  // Placeholder for non-existent account ids/objects
-  NO_ACCOUNT: "NO_ACCOUNT",
-  // Claims
-  CLAIMS: "claims",
-  // Consumer UTID
-  CONSUMER_UTID: "9188040d-6c67-4c5b-b112-36a304b66dad",
-  // Default scopes
-  OPENID_SCOPE: "openid",
-  PROFILE_SCOPE: "profile",
-  OFFLINE_ACCESS_SCOPE: "offline_access",
-  EMAIL_SCOPE: "email",
-  CODE_GRANT_TYPE: "authorization_code",
-  RT_GRANT_TYPE: "refresh_token",
-  S256_CODE_CHALLENGE_METHOD: "S256",
-  URL_FORM_CONTENT_TYPE: "application/x-www-form-urlencoded;charset=utf-8",
-  AUTHORIZATION_PENDING: "authorization_pending",
-  NOT_DEFINED: "not_defined",
-  EMPTY_STRING: "",
-  NOT_APPLICABLE: "N/A",
-  NOT_AVAILABLE: "Not Available",
-  FORWARD_SLASH: "/",
-  IMDS_ENDPOINT: "http://169.254.169.254/metadata/instance/compute/location",
-  IMDS_VERSION: "2020-06-01",
-  IMDS_TIMEOUT: 2e3,
-  AZURE_REGION_AUTO_DISCOVER_FLAG: "TryAutoDetect",
-  REGIONAL_AUTH_PUBLIC_CLOUD_SUFFIX: "login.microsoft.com",
-  KNOWN_PUBLIC_CLOUDS: [
-    "login.microsoftonline.com",
-    "login.windows.net",
-    "login.microsoft.com",
-    "sts.windows.net"
-  ],
-  SHR_NONCE_VALIDITY: 240,
-  INVALID_INSTANCE: "invalid_instance"
-};
-var HttpStatus = {
-  SUCCESS: 200,
-  SUCCESS_RANGE_START: 200,
-  SUCCESS_RANGE_END: 299,
-  REDIRECT: 302,
-  CLIENT_ERROR: 400,
-  CLIENT_ERROR_RANGE_START: 400,
-  BAD_REQUEST: 400,
-  UNAUTHORIZED: 401,
-  NOT_FOUND: 404,
-  REQUEST_TIMEOUT: 408,
-  GONE: 410,
-  TOO_MANY_REQUESTS: 429,
-  CLIENT_ERROR_RANGE_END: 499,
-  SERVER_ERROR: 500,
-  SERVER_ERROR_RANGE_START: 500,
-  SERVICE_UNAVAILABLE: 503,
-  GATEWAY_TIMEOUT: 504,
-  SERVER_ERROR_RANGE_END: 599,
-  MULTI_SIDED_ERROR: 600
+// node_modules/@azure/msal-common/dist/request/RequestParameterBuilder.mjs
+var RequestParameterBuilder_exports = {};
+__export(RequestParameterBuilder_exports, {
+  addApplicationTelemetry: () => addApplicationTelemetry,
+  addAuthorizationCode: () => addAuthorizationCode,
+  addBrokerParameters: () => addBrokerParameters,
+  addCcsOid: () => addCcsOid,
+  addCcsUpn: () => addCcsUpn,
+  addClaims: () => addClaims,
+  addCliData: () => addCliData,
+  addClientAssertion: () => addClientAssertion,
+  addClientAssertionType: () => addClientAssertionType,
+  addClientCapabilitiesToClaims: () => addClientCapabilitiesToClaims,
+  addClientId: () => addClientId,
+  addClientInfo: () => addClientInfo,
+  addClientSecret: () => addClientSecret,
+  addCodeChallengeParams: () => addCodeChallengeParams,
+  addCodeVerifier: () => addCodeVerifier,
+  addCorrelationId: () => addCorrelationId,
+  addDeviceCode: () => addDeviceCode,
+  addDomainHint: () => addDomainHint,
+  addEARParameters: () => addEARParameters,
+  addExtraParameters: () => addExtraParameters,
+  addGrantType: () => addGrantType,
+  addIdTokenHint: () => addIdTokenHint,
+  addInstanceAware: () => addInstanceAware,
+  addLibraryInfo: () => addLibraryInfo,
+  addLoginHint: () => addLoginHint,
+  addLogoutHint: () => addLogoutHint,
+  addNativeBroker: () => addNativeBroker,
+  addNonce: () => addNonce,
+  addOboAssertion: () => addOboAssertion,
+  addPassword: () => addPassword,
+  addPopToken: () => addPopToken,
+  addPostLogoutRedirectUri: () => addPostLogoutRedirectUri,
+  addPrompt: () => addPrompt,
+  addRedirectUri: () => addRedirectUri,
+  addRefreshToken: () => addRefreshToken,
+  addRequestTokenUse: () => addRequestTokenUse,
+  addResource: () => addResource,
+  addResponseMode: () => addResponseMode,
+  addResponseType: () => addResponseType,
+  addScopes: () => addScopes,
+  addServerTelemetry: () => addServerTelemetry,
+  addSid: () => addSid,
+  addSshJwk: () => addSshJwk,
+  addState: () => addState,
+  addThrottling: () => addThrottling,
+  addUsername: () => addUsername,
+  instrumentBrokerParams: () => instrumentBrokerParams
+});
+
+// node_modules/@azure/msal-common/dist/utils/Constants.mjs
+var Constants_exports = {};
+__export(Constants_exports, {
+  AADAuthority: () => AADAuthority,
+  AAD_INSTANCE_DISCOVERY_ENDPT: () => AAD_INSTANCE_DISCOVERY_ENDPT,
+  AAD_TENANT_DOMAIN_SUFFIX: () => AAD_TENANT_DOMAIN_SUFFIX,
+  ADFS: () => ADFS,
+  APP_METADATA: () => APP_METADATA,
+  AUTHORITY_METADATA_CACHE_KEY: () => AUTHORITY_METADATA_CACHE_KEY,
+  AUTHORITY_METADATA_REFRESH_TIME_SECONDS: () => AUTHORITY_METADATA_REFRESH_TIME_SECONDS,
+  AUTHORIZATION_PENDING: () => AUTHORIZATION_PENDING,
+  AZURE_REGION_AUTO_DISCOVER_FLAG: () => AZURE_REGION_AUTO_DISCOVER_FLAG,
+  AuthenticationScheme: () => AuthenticationScheme,
+  AuthorityMetadataSource: () => AuthorityMetadataSource,
+  CACHE_ACCOUNT_TYPE_ADFS: () => CACHE_ACCOUNT_TYPE_ADFS,
+  CACHE_ACCOUNT_TYPE_GENERIC: () => CACHE_ACCOUNT_TYPE_GENERIC,
+  CACHE_ACCOUNT_TYPE_MSAV1: () => CACHE_ACCOUNT_TYPE_MSAV1,
+  CACHE_ACCOUNT_TYPE_MSSTS: () => CACHE_ACCOUNT_TYPE_MSSTS,
+  CACHE_KEY_SEPARATOR: () => CACHE_KEY_SEPARATOR,
+  CIAM_AUTH_URL: () => CIAM_AUTH_URL,
+  CLIENT_INFO: () => CLIENT_INFO,
+  CLIENT_INFO_SEPARATOR: () => CLIENT_INFO_SEPARATOR,
+  CLIENT_MISMATCH_ERROR: () => CLIENT_MISMATCH_ERROR,
+  CODE_GRANT_TYPE: () => CODE_GRANT_TYPE,
+  CONSUMER_UTID: () => CONSUMER_UTID,
+  CacheOutcome: () => CacheOutcome,
+  CacheType: () => CacheType,
+  ClaimsRequestKeys: () => ClaimsRequestKeys,
+  CodeChallengeMethodValues: () => CodeChallengeMethodValues,
+  CredentialType: () => CredentialType,
+  DEFAULT_AUTHORITY: () => DEFAULT_AUTHORITY,
+  DEFAULT_AUTHORITY_HOST: () => DEFAULT_AUTHORITY_HOST,
+  DEFAULT_COMMON_TENANT: () => DEFAULT_COMMON_TENANT,
+  DEFAULT_MAX_THROTTLE_TIME_SECONDS: () => DEFAULT_MAX_THROTTLE_TIME_SECONDS,
+  DEFAULT_THROTTLE_TIME_SECONDS: () => DEFAULT_THROTTLE_TIME_SECONDS,
+  DEFAULT_TOKEN_RENEWAL_OFFSET_SEC: () => DEFAULT_TOKEN_RENEWAL_OFFSET_SEC,
+  DSTS: () => DSTS,
+  EMAIL_SCOPE: () => EMAIL_SCOPE,
+  EncodingTypes: () => EncodingTypes,
+  FORWARD_SLASH: () => FORWARD_SLASH,
+  GrantType: () => GrantType,
+  HTTP_BAD_REQUEST: () => HTTP_BAD_REQUEST,
+  HTTP_CLIENT_ERROR: () => HTTP_CLIENT_ERROR,
+  HTTP_CLIENT_ERROR_RANGE_END: () => HTTP_CLIENT_ERROR_RANGE_END,
+  HTTP_CLIENT_ERROR_RANGE_START: () => HTTP_CLIENT_ERROR_RANGE_START,
+  HTTP_GATEWAY_TIMEOUT: () => HTTP_GATEWAY_TIMEOUT,
+  HTTP_GONE: () => HTTP_GONE,
+  HTTP_MULTI_SIDED_ERROR: () => HTTP_MULTI_SIDED_ERROR,
+  HTTP_NOT_FOUND: () => HTTP_NOT_FOUND,
+  HTTP_REDIRECT: () => HTTP_REDIRECT,
+  HTTP_REQUEST_TIMEOUT: () => HTTP_REQUEST_TIMEOUT,
+  HTTP_SERVER_ERROR: () => HTTP_SERVER_ERROR,
+  HTTP_SERVER_ERROR_RANGE_END: () => HTTP_SERVER_ERROR_RANGE_END,
+  HTTP_SERVER_ERROR_RANGE_START: () => HTTP_SERVER_ERROR_RANGE_START,
+  HTTP_SERVICE_UNAVAILABLE: () => HTTP_SERVICE_UNAVAILABLE,
+  HTTP_SUCCESS: () => HTTP_SUCCESS,
+  HTTP_SUCCESS_RANGE_END: () => HTTP_SUCCESS_RANGE_END,
+  HTTP_SUCCESS_RANGE_START: () => HTTP_SUCCESS_RANGE_START,
+  HTTP_TOO_MANY_REQUESTS: () => HTTP_TOO_MANY_REQUESTS,
+  HTTP_UNAUTHORIZED: () => HTTP_UNAUTHORIZED,
+  HeaderNames: () => HeaderNames,
+  HttpMethod: () => HttpMethod,
+  IMDS_ENDPOINT: () => IMDS_ENDPOINT,
+  IMDS_TIMEOUT: () => IMDS_TIMEOUT,
+  IMDS_VERSION: () => IMDS_VERSION,
+  INVALID_GRANT_ERROR: () => INVALID_GRANT_ERROR,
+  INVALID_INSTANCE: () => INVALID_INSTANCE,
+  JsonWebTokenTypes: () => JsonWebTokenTypes,
+  KNOWN_PUBLIC_CLOUDS: () => KNOWN_PUBLIC_CLOUDS,
+  NOT_APPLICABLE: () => NOT_APPLICABLE,
+  NOT_AVAILABLE: () => NOT_AVAILABLE,
+  OAuthResponseType: () => OAuthResponseType,
+  OFFLINE_ACCESS_SCOPE: () => OFFLINE_ACCESS_SCOPE,
+  OIDC_DEFAULT_SCOPES: () => OIDC_DEFAULT_SCOPES,
+  OIDC_SCOPES: () => OIDC_SCOPES,
+  ONE_DAY_IN_MS: () => ONE_DAY_IN_MS,
+  OPENID_SCOPE: () => OPENID_SCOPE,
+  PROFILE_SCOPE: () => PROFILE_SCOPE,
+  PasswordGrantConstants: () => PasswordGrantConstants,
+  PersistentCacheKeys: () => PersistentCacheKeys,
+  PromptValue: () => PromptValue,
+  REGIONAL_AUTH_PUBLIC_CLOUD_SUFFIX: () => REGIONAL_AUTH_PUBLIC_CLOUD_SUFFIX,
+  RESOURCE_DELIM: () => RESOURCE_DELIM,
+  RegionDiscoveryOutcomes: () => RegionDiscoveryOutcomes,
+  RegionDiscoverySources: () => RegionDiscoverySources,
+  ResponseMode: () => ResponseMode,
+  S256_CODE_CHALLENGE_METHOD: () => S256_CODE_CHALLENGE_METHOD,
+  SERVER_TELEM_CACHE_KEY: () => SERVER_TELEM_CACHE_KEY,
+  SERVER_TELEM_CATEGORY_SEPARATOR: () => SERVER_TELEM_CATEGORY_SEPARATOR,
+  SERVER_TELEM_MAX_CACHED_ERRORS: () => SERVER_TELEM_MAX_CACHED_ERRORS,
+  SERVER_TELEM_MAX_CUR_HEADER_BYTES: () => SERVER_TELEM_MAX_CUR_HEADER_BYTES,
+  SERVER_TELEM_MAX_LAST_HEADER_BYTES: () => SERVER_TELEM_MAX_LAST_HEADER_BYTES,
+  SERVER_TELEM_OVERFLOW_FALSE: () => SERVER_TELEM_OVERFLOW_FALSE,
+  SERVER_TELEM_OVERFLOW_TRUE: () => SERVER_TELEM_OVERFLOW_TRUE,
+  SERVER_TELEM_SCHEMA_VERSION: () => SERVER_TELEM_SCHEMA_VERSION,
+  SERVER_TELEM_UNKNOWN_ERROR: () => SERVER_TELEM_UNKNOWN_ERROR,
+  SERVER_TELEM_VALUE_SEPARATOR: () => SERVER_TELEM_VALUE_SEPARATOR,
+  SHR_NONCE_VALIDITY: () => SHR_NONCE_VALIDITY,
+  SKU: () => SKU,
+  THE_FAMILY_ID: () => THE_FAMILY_ID,
+  THROTTLING_PREFIX: () => THROTTLING_PREFIX,
+  URL_FORM_CONTENT_TYPE: () => URL_FORM_CONTENT_TYPE,
+  X_MS_LIB_CAPABILITY_VALUE: () => X_MS_LIB_CAPABILITY_VALUE
+});
+var SKU = "msal.js.common";
+var DEFAULT_AUTHORITY = "https://login.microsoftonline.com/common/";
+var DEFAULT_AUTHORITY_HOST = "login.microsoftonline.com";
+var DEFAULT_COMMON_TENANT = "common";
+var ADFS = "adfs";
+var DSTS = "dstsv2";
+var AAD_INSTANCE_DISCOVERY_ENDPT = `${DEFAULT_AUTHORITY}discovery/instance?api-version=1.1&authorization_endpoint=`;
+var CIAM_AUTH_URL = ".ciamlogin.com";
+var AAD_TENANT_DOMAIN_SUFFIX = ".onmicrosoft.com";
+var RESOURCE_DELIM = "|";
+var CONSUMER_UTID = "9188040d-6c67-4c5b-b112-36a304b66dad";
+var OPENID_SCOPE = "openid";
+var PROFILE_SCOPE = "profile";
+var OFFLINE_ACCESS_SCOPE = "offline_access";
+var EMAIL_SCOPE = "email";
+var CODE_GRANT_TYPE = "authorization_code";
+var S256_CODE_CHALLENGE_METHOD = "S256";
+var URL_FORM_CONTENT_TYPE = "application/x-www-form-urlencoded;charset=utf-8";
+var AUTHORIZATION_PENDING = "authorization_pending";
+var NOT_APPLICABLE = "N/A";
+var NOT_AVAILABLE = "Not Available";
+var FORWARD_SLASH = "/";
+var IMDS_ENDPOINT = "http://169.254.169.254/metadata/instance/compute/location";
+var IMDS_VERSION = "2020-06-01";
+var IMDS_TIMEOUT = 2e3;
+var AZURE_REGION_AUTO_DISCOVER_FLAG = "TryAutoDetect";
+var REGIONAL_AUTH_PUBLIC_CLOUD_SUFFIX = "login.microsoft.com";
+var KNOWN_PUBLIC_CLOUDS = [
+  "login.microsoftonline.com",
+  "login.windows.net",
+  "login.microsoft.com",
+  "sts.windows.net"
+];
+var SHR_NONCE_VALIDITY = 240;
+var INVALID_INSTANCE = "invalid_instance";
+var HTTP_SUCCESS = 200;
+var HTTP_SUCCESS_RANGE_START = 200;
+var HTTP_SUCCESS_RANGE_END = 299;
+var HTTP_REDIRECT = 302;
+var HTTP_CLIENT_ERROR = 400;
+var HTTP_CLIENT_ERROR_RANGE_START = 400;
+var HTTP_BAD_REQUEST = 400;
+var HTTP_UNAUTHORIZED = 401;
+var HTTP_NOT_FOUND = 404;
+var HTTP_REQUEST_TIMEOUT = 408;
+var HTTP_GONE = 410;
+var HTTP_TOO_MANY_REQUESTS = 429;
+var HTTP_CLIENT_ERROR_RANGE_END = 499;
+var HTTP_SERVER_ERROR = 500;
+var HTTP_SERVER_ERROR_RANGE_START = 500;
+var HTTP_SERVICE_UNAVAILABLE = 503;
+var HTTP_GATEWAY_TIMEOUT = 504;
+var HTTP_SERVER_ERROR_RANGE_END = 599;
+var HTTP_MULTI_SIDED_ERROR = 600;
+var HttpMethod = {
+  GET: "GET",
+  POST: "POST"
 };
 var OIDC_DEFAULT_SCOPES = [
-  Constants.OPENID_SCOPE,
-  Constants.PROFILE_SCOPE,
-  Constants.OFFLINE_ACCESS_SCOPE
+  OPENID_SCOPE,
+  PROFILE_SCOPE,
+  OFFLINE_ACCESS_SCOPE
 ];
-var OIDC_SCOPES = [...OIDC_DEFAULT_SCOPES, Constants.EMAIL_SCOPE];
+var OIDC_SCOPES = [...OIDC_DEFAULT_SCOPES, EMAIL_SCOPE];
 var HeaderNames = {
   CONTENT_TYPE: "Content-Type",
   CONTENT_LENGTH: "Content-Length",
@@ -31054,7 +32288,11 @@ var HeaderNames = {
   X_MS_REQUEST_ID: "x-ms-request-id",
   X_MS_HTTP_VERSION: "x-ms-httpver"
 };
-var AADAuthorityConstants = {
+var PersistentCacheKeys = {
+  ACTIVE_ACCOUNT_FILTERS: "active-account-filters"
+  // new cache entry for active_account for a more robust version for browser
+};
+var AADAuthority = {
   COMMON: "common",
   ORGANIZATIONS: "organizations",
   CONSUMERS: "consumers"
@@ -31094,75 +32332,64 @@ var GrantType = {
   DEVICE_CODE_GRANT: "device_code",
   JWT_BEARER: "urn:ietf:params:oauth:grant-type:jwt-bearer"
 };
-var CacheAccountType = {
-  MSSTS_ACCOUNT_TYPE: "MSSTS",
-  ADFS_ACCOUNT_TYPE: "ADFS",
-  MSAV1_ACCOUNT_TYPE: "MSA",
-  GENERIC_ACCOUNT_TYPE: "Generic"
-  // NTLM, Kerberos, FBA, Basic etc
-};
-var Separators = {
-  CACHE_KEY_SEPARATOR: "-",
-  CLIENT_INFO_SEPARATOR: "."
-};
+var CACHE_ACCOUNT_TYPE_MSSTS = "MSSTS";
+var CACHE_ACCOUNT_TYPE_ADFS = "ADFS";
+var CACHE_ACCOUNT_TYPE_MSAV1 = "MSA";
+var CACHE_ACCOUNT_TYPE_GENERIC = "Generic";
+var CACHE_KEY_SEPARATOR = "-";
+var CLIENT_INFO_SEPARATOR = ".";
 var CredentialType = {
   ID_TOKEN: "IdToken",
   ACCESS_TOKEN: "AccessToken",
   ACCESS_TOKEN_WITH_AUTH_SCHEME: "AccessToken_With_AuthScheme",
   REFRESH_TOKEN: "RefreshToken"
 };
+var CacheType = {
+  ADFS: 1001,
+  MSA: 1002,
+  MSSTS: 1003,
+  GENERIC: 1004,
+  ACCESS_TOKEN: 2001,
+  REFRESH_TOKEN: 2002,
+  ID_TOKEN: 2003,
+  APP_METADATA: 3001,
+  UNDEFINED: 9999
+};
 var APP_METADATA = "appmetadata";
 var CLIENT_INFO = "client_info";
 var THE_FAMILY_ID = "1";
-var AUTHORITY_METADATA_CONSTANTS = {
-  CACHE_KEY: "authority-metadata",
-  REFRESH_TIME_SECONDS: 3600 * 24
-  // 24 Hours
-};
+var AUTHORITY_METADATA_CACHE_KEY = "authority-metadata";
+var AUTHORITY_METADATA_REFRESH_TIME_SECONDS = 3600 * 24;
 var AuthorityMetadataSource = {
   CONFIG: "config",
   CACHE: "cache",
   NETWORK: "network",
   HARDCODED_VALUES: "hardcoded_values"
 };
-var SERVER_TELEM_CONSTANTS = {
-  SCHEMA_VERSION: 5,
-  MAX_CUR_HEADER_BYTES: 80,
-  MAX_LAST_HEADER_BYTES: 330,
-  MAX_CACHED_ERRORS: 50,
-  CACHE_KEY: "server-telemetry",
-  CATEGORY_SEPARATOR: "|",
-  VALUE_SEPARATOR: ",",
-  OVERFLOW_TRUE: "1",
-  OVERFLOW_FALSE: "0",
-  UNKNOWN_ERROR: "unknown_error"
-};
+var SERVER_TELEM_SCHEMA_VERSION = 5;
+var SERVER_TELEM_MAX_CUR_HEADER_BYTES = 80;
+var SERVER_TELEM_MAX_LAST_HEADER_BYTES = 330;
+var SERVER_TELEM_MAX_CACHED_ERRORS = 50;
+var SERVER_TELEM_CACHE_KEY = "server-telemetry";
+var SERVER_TELEM_CATEGORY_SEPARATOR = "|";
+var SERVER_TELEM_VALUE_SEPARATOR = ",";
+var SERVER_TELEM_OVERFLOW_TRUE = "1";
+var SERVER_TELEM_OVERFLOW_FALSE = "0";
+var SERVER_TELEM_UNKNOWN_ERROR = "unknown_error";
 var AuthenticationScheme = {
   BEARER: "Bearer",
   POP: "pop",
   SSH: "ssh-cert"
 };
-var ThrottlingConstants = {
-  // Default time to throttle RequestThumbprint in seconds
-  DEFAULT_THROTTLE_TIME_SECONDS: 60,
-  // Default maximum time to throttle in seconds, overrides what the server sends back
-  DEFAULT_MAX_THROTTLE_TIME_SECONDS: 3600,
-  // Prefix for storing throttling entries
-  THROTTLING_PREFIX: "throttling",
-  // Value assigned to the x-ms-lib-capability header to indicate to the server the library supports throttling
-  X_MS_LIB_CAPABILITY_VALUE: "retry-after, h429"
-};
-var Errors = {
-  INVALID_GRANT_ERROR: "invalid_grant",
-  CLIENT_MISMATCH_ERROR: "client_mismatch"
-};
+var DEFAULT_THROTTLE_TIME_SECONDS = 60;
+var DEFAULT_MAX_THROTTLE_TIME_SECONDS = 3600;
+var THROTTLING_PREFIX = "throttling";
+var X_MS_LIB_CAPABILITY_VALUE = "retry-after, h429";
+var INVALID_GRANT_ERROR = "invalid_grant";
+var CLIENT_MISMATCH_ERROR = "client_mismatch";
 var PasswordGrantConstants = {
   username: "username",
   password: "password"
-};
-var ResponseCodes = {
-  httpSuccess: 200,
-  httpBadRequest: 400
 };
 var RegionDiscoverySources = {
   FAILED_AUTO_DETECTION: "1",
@@ -31189,40 +32416,157 @@ var CacheOutcome = {
   // When the token request goes to the identity provider because refresh_in was used and the existing token needs to be refreshed
   PROACTIVELY_REFRESHED: "4"
 };
+var JsonWebTokenTypes = {
+  Jwt: "JWT",
+  Jwk: "JWK",
+  Pop: "pop"
+};
+var ONE_DAY_IN_MS = 864e5;
 var DEFAULT_TOKEN_RENEWAL_OFFSET_SEC = 300;
+var EncodingTypes = {
+  BASE64: "base64",
+  HEX: "hex",
+  UTF8: "utf-8"
+};
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/AuthErrorCodes.mjs
-var AuthErrorCodes_exports = {};
-__export(AuthErrorCodes_exports, {
-  postRequestFailed: () => postRequestFailed,
-  unexpectedError: () => unexpectedError
+// node_modules/@azure/msal-common/dist/constants/AADServerParamKeys.mjs
+var AADServerParamKeys_exports = {};
+__export(AADServerParamKeys_exports, {
+  ACCESS_TOKEN: () => ACCESS_TOKEN,
+  BROKER_CLIENT_ID: () => BROKER_CLIENT_ID,
+  BROKER_REDIRECT_URI: () => BROKER_REDIRECT_URI,
+  CCS_HEADER: () => CCS_HEADER,
+  CLAIMS: () => CLAIMS,
+  CLIENT_ASSERTION: () => CLIENT_ASSERTION,
+  CLIENT_ASSERTION_TYPE: () => CLIENT_ASSERTION_TYPE,
+  CLIENT_ID: () => CLIENT_ID,
+  CLIENT_INFO: () => CLIENT_INFO2,
+  CLIENT_REQUEST_ID: () => CLIENT_REQUEST_ID,
+  CLIENT_SECRET: () => CLIENT_SECRET,
+  CLI_DATA: () => CLI_DATA,
+  CODE: () => CODE,
+  CODE_CHALLENGE: () => CODE_CHALLENGE,
+  CODE_CHALLENGE_METHOD: () => CODE_CHALLENGE_METHOD,
+  CODE_VERIFIER: () => CODE_VERIFIER,
+  DEVICE_CODE: () => DEVICE_CODE,
+  DOMAIN_HINT: () => DOMAIN_HINT,
+  EAR_JWE_CRYPTO: () => EAR_JWE_CRYPTO,
+  EAR_JWK: () => EAR_JWK,
+  ERROR: () => ERROR,
+  ERROR_DESCRIPTION: () => ERROR_DESCRIPTION,
+  EXPIRES_IN: () => EXPIRES_IN,
+  FOCI: () => FOCI,
+  GRANT_TYPE: () => GRANT_TYPE,
+  ID_TOKEN: () => ID_TOKEN,
+  ID_TOKEN_HINT: () => ID_TOKEN_HINT,
+  INSTANCE_AWARE: () => INSTANCE_AWARE,
+  LOGIN_HINT: () => LOGIN_HINT,
+  LOGOUT_HINT: () => LOGOUT_HINT,
+  NATIVE_BROKER: () => NATIVE_BROKER,
+  NONCE: () => NONCE,
+  OBO_ASSERTION: () => OBO_ASSERTION,
+  ON_BEHALF_OF: () => ON_BEHALF_OF,
+  POST_LOGOUT_URI: () => POST_LOGOUT_URI,
+  PROMPT: () => PROMPT,
+  REDIRECT_URI: () => REDIRECT_URI,
+  REFRESH_TOKEN: () => REFRESH_TOKEN,
+  REFRESH_TOKEN_EXPIRES_IN: () => REFRESH_TOKEN_EXPIRES_IN,
+  REQUESTED_TOKEN_USE: () => REQUESTED_TOKEN_USE,
+  REQ_CNF: () => REQ_CNF,
+  RESOURCE: () => RESOURCE,
+  RESPONSE_MODE: () => RESPONSE_MODE,
+  RESPONSE_TYPE: () => RESPONSE_TYPE,
+  RETURN_SPA_CODE: () => RETURN_SPA_CODE,
+  SCOPE: () => SCOPE,
+  SESSION_STATE: () => SESSION_STATE,
+  SID: () => SID,
+  STATE: () => STATE,
+  TOKEN_TYPE: () => TOKEN_TYPE,
+  X_APP_NAME: () => X_APP_NAME,
+  X_APP_VER: () => X_APP_VER,
+  X_CLIENT_CPU: () => X_CLIENT_CPU,
+  X_CLIENT_CURR_TELEM: () => X_CLIENT_CURR_TELEM,
+  X_CLIENT_EXTRA_SKU: () => X_CLIENT_EXTRA_SKU,
+  X_CLIENT_LAST_TELEM: () => X_CLIENT_LAST_TELEM,
+  X_CLIENT_OS: () => X_CLIENT_OS,
+  X_CLIENT_SKU: () => X_CLIENT_SKU,
+  X_CLIENT_VER: () => X_CLIENT_VER,
+  X_MS_LIB_CAPABILITY: () => X_MS_LIB_CAPABILITY
 });
-var unexpectedError = "unexpected_error";
-var postRequestFailed = "post_request_failed";
+var CLIENT_ID = "client_id";
+var REDIRECT_URI = "redirect_uri";
+var RESPONSE_TYPE = "response_type";
+var RESPONSE_MODE = "response_mode";
+var GRANT_TYPE = "grant_type";
+var CLAIMS = "claims";
+var SCOPE = "scope";
+var ERROR = "error";
+var ERROR_DESCRIPTION = "error_description";
+var ACCESS_TOKEN = "access_token";
+var ID_TOKEN = "id_token";
+var REFRESH_TOKEN = "refresh_token";
+var EXPIRES_IN = "expires_in";
+var REFRESH_TOKEN_EXPIRES_IN = "refresh_token_expires_in";
+var STATE = "state";
+var NONCE = "nonce";
+var PROMPT = "prompt";
+var SESSION_STATE = "session_state";
+var CLIENT_INFO2 = "client_info";
+var CODE = "code";
+var CODE_CHALLENGE = "code_challenge";
+var CODE_CHALLENGE_METHOD = "code_challenge_method";
+var CODE_VERIFIER = "code_verifier";
+var CLIENT_REQUEST_ID = "client-request-id";
+var X_CLIENT_SKU = "x-client-SKU";
+var X_CLIENT_VER = "x-client-VER";
+var X_CLIENT_OS = "x-client-OS";
+var X_CLIENT_CPU = "x-client-CPU";
+var X_CLIENT_CURR_TELEM = "x-client-current-telemetry";
+var X_CLIENT_LAST_TELEM = "x-client-last-telemetry";
+var X_MS_LIB_CAPABILITY = "x-ms-lib-capability";
+var X_APP_NAME = "x-app-name";
+var X_APP_VER = "x-app-ver";
+var POST_LOGOUT_URI = "post_logout_redirect_uri";
+var ID_TOKEN_HINT = "id_token_hint";
+var DEVICE_CODE = "device_code";
+var CLIENT_SECRET = "client_secret";
+var CLIENT_ASSERTION = "client_assertion";
+var CLIENT_ASSERTION_TYPE = "client_assertion_type";
+var TOKEN_TYPE = "token_type";
+var REQ_CNF = "req_cnf";
+var OBO_ASSERTION = "assertion";
+var REQUESTED_TOKEN_USE = "requested_token_use";
+var ON_BEHALF_OF = "on_behalf_of";
+var FOCI = "foci";
+var CCS_HEADER = "X-AnchorMailbox";
+var RETURN_SPA_CODE = "return_spa_code";
+var NATIVE_BROKER = "nativebroker";
+var LOGOUT_HINT = "logout_hint";
+var SID = "sid";
+var LOGIN_HINT = "login_hint";
+var DOMAIN_HINT = "domain_hint";
+var X_CLIENT_EXTRA_SKU = "x-client-xtra-sku";
+var BROKER_CLIENT_ID = "brk_client_id";
+var BROKER_REDIRECT_URI = "brk_redirect_uri";
+var INSTANCE_AWARE = "instance_aware";
+var EAR_JWK = "ear_jwk";
+var EAR_JWE_CRYPTO = "ear_jwe_crypto";
+var RESOURCE = "resource";
+var CLI_DATA = "clidata";
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/AuthError.mjs
-var AuthErrorMessages = {
-  [unexpectedError]: "Unexpected error in authentication.",
-  [postRequestFailed]: "Post request failed from the network, could be a 4xx/5xx or a network unavailability. Please check the exact error code for details."
-};
-var AuthErrorMessage = {
-  unexpectedError: {
-    code: unexpectedError,
-    desc: AuthErrorMessages[unexpectedError]
-  },
-  postRequestFailed: {
-    code: postRequestFailed,
-    desc: AuthErrorMessages[postRequestFailed]
-  }
-};
+// node_modules/@azure/msal-common/dist/error/AuthError.mjs
+function getDefaultErrorMessage(code) {
+  return `See https://aka.ms/msal.js.errors#${code} for details`;
+}
 var AuthError = class _AuthError extends Error {
   constructor(errorCode, errorMessage, suberror) {
-    const errorString = errorMessage ? `${errorCode}: ${errorMessage}` : errorCode;
+    const message = errorMessage || (errorCode ? getDefaultErrorMessage(errorCode) : "");
+    const errorString = message ? `${errorCode}: ${message}` : errorCode;
     super(errorString);
     Object.setPrototypeOf(this, _AuthError.prototype);
-    this.errorCode = errorCode || Constants.EMPTY_STRING;
-    this.errorMessage = errorMessage || Constants.EMPTY_STRING;
-    this.subError = suberror || Constants.EMPTY_STRING;
+    this.errorCode = errorCode || "";
+    this.errorMessage = message || "";
+    this.subError = suberror || "";
     this.name = "AuthError";
   }
   setCorrelationId(correlationId) {
@@ -31230,1003 +32574,13 @@ var AuthError = class _AuthError extends Error {
   }
 };
 function createAuthError(code, additionalMessage) {
-  return new AuthError(code, additionalMessage ? `${AuthErrorMessages[code]} ${additionalMessage}` : AuthErrorMessages[code]);
+  return new AuthError(code, additionalMessage || getDefaultErrorMessage(code));
 }
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ClientAuthErrorCodes.mjs
-var ClientAuthErrorCodes_exports = {};
-__export(ClientAuthErrorCodes_exports, {
-  authTimeNotFound: () => authTimeNotFound,
-  authorizationCodeMissingFromServerResponse: () => authorizationCodeMissingFromServerResponse,
-  bindingKeyNotRemoved: () => bindingKeyNotRemoved,
-  cannotAppendScopeSet: () => cannotAppendScopeSet,
-  cannotRemoveEmptyScope: () => cannotRemoveEmptyScope,
-  clientInfoDecodingError: () => clientInfoDecodingError,
-  clientInfoEmptyError: () => clientInfoEmptyError,
-  deviceCodeExpired: () => deviceCodeExpired,
-  deviceCodePollingCancelled: () => deviceCodePollingCancelled,
-  deviceCodeUnknownError: () => deviceCodeUnknownError,
-  emptyInputScopeSet: () => emptyInputScopeSet,
-  endSessionEndpointNotSupported: () => endSessionEndpointNotSupported,
-  endpointResolutionError: () => endpointResolutionError,
-  hashNotDeserialized: () => hashNotDeserialized,
-  invalidAssertion: () => invalidAssertion,
-  invalidCacheEnvironment: () => invalidCacheEnvironment,
-  invalidCacheRecord: () => invalidCacheRecord,
-  invalidClientCredential: () => invalidClientCredential,
-  invalidState: () => invalidState,
-  keyIdMissing: () => keyIdMissing,
-  maxAgeTranspired: () => maxAgeTranspired,
-  methodNotImplemented: () => methodNotImplemented,
-  missingTenantIdError: () => missingTenantIdError,
-  multipleMatchingAccounts: () => multipleMatchingAccounts,
-  multipleMatchingAppMetadata: () => multipleMatchingAppMetadata,
-  multipleMatchingTokens: () => multipleMatchingTokens,
-  nestedAppAuthBridgeDisabled: () => nestedAppAuthBridgeDisabled,
-  networkError: () => networkError,
-  noAccountFound: () => noAccountFound,
-  noAccountInSilentRequest: () => noAccountInSilentRequest,
-  noCryptoObject: () => noCryptoObject,
-  noNetworkConnectivity: () => noNetworkConnectivity,
-  nonceMismatch: () => nonceMismatch,
-  nullOrEmptyToken: () => nullOrEmptyToken,
-  openIdConfigError: () => openIdConfigError,
-  requestCannotBeMade: () => requestCannotBeMade,
-  stateMismatch: () => stateMismatch,
-  stateNotFound: () => stateNotFound,
-  tokenClaimsCnfRequiredForSignedJwt: () => tokenClaimsCnfRequiredForSignedJwt,
-  tokenParsingError: () => tokenParsingError,
-  tokenRefreshRequired: () => tokenRefreshRequired,
-  unexpectedCredentialType: () => unexpectedCredentialType,
-  userCanceled: () => userCanceled,
-  userTimeoutReached: () => userTimeoutReached
-});
-var clientInfoDecodingError = "client_info_decoding_error";
-var clientInfoEmptyError = "client_info_empty_error";
-var tokenParsingError = "token_parsing_error";
-var nullOrEmptyToken = "null_or_empty_token";
-var endpointResolutionError = "endpoints_resolution_error";
-var networkError = "network_error";
-var openIdConfigError = "openid_config_error";
-var hashNotDeserialized = "hash_not_deserialized";
-var invalidState = "invalid_state";
-var stateMismatch = "state_mismatch";
-var stateNotFound = "state_not_found";
-var nonceMismatch = "nonce_mismatch";
-var authTimeNotFound = "auth_time_not_found";
-var maxAgeTranspired = "max_age_transpired";
-var multipleMatchingTokens = "multiple_matching_tokens";
-var multipleMatchingAccounts = "multiple_matching_accounts";
-var multipleMatchingAppMetadata = "multiple_matching_appMetadata";
-var requestCannotBeMade = "request_cannot_be_made";
-var cannotRemoveEmptyScope = "cannot_remove_empty_scope";
-var cannotAppendScopeSet = "cannot_append_scopeset";
-var emptyInputScopeSet = "empty_input_scopeset";
-var deviceCodePollingCancelled = "device_code_polling_cancelled";
-var deviceCodeExpired = "device_code_expired";
-var deviceCodeUnknownError = "device_code_unknown_error";
-var noAccountInSilentRequest = "no_account_in_silent_request";
-var invalidCacheRecord = "invalid_cache_record";
-var invalidCacheEnvironment = "invalid_cache_environment";
-var noAccountFound = "no_account_found";
-var noCryptoObject = "no_crypto_object";
-var unexpectedCredentialType = "unexpected_credential_type";
-var invalidAssertion = "invalid_assertion";
-var invalidClientCredential = "invalid_client_credential";
-var tokenRefreshRequired = "token_refresh_required";
-var userTimeoutReached = "user_timeout_reached";
-var tokenClaimsCnfRequiredForSignedJwt = "token_claims_cnf_required_for_signedjwt";
-var authorizationCodeMissingFromServerResponse = "authorization_code_missing_from_server_response";
-var bindingKeyNotRemoved = "binding_key_not_removed";
-var endSessionEndpointNotSupported = "end_session_endpoint_not_supported";
-var keyIdMissing = "key_id_missing";
-var noNetworkConnectivity = "no_network_connectivity";
-var userCanceled = "user_canceled";
-var missingTenantIdError = "missing_tenant_id_error";
-var methodNotImplemented = "method_not_implemented";
-var nestedAppAuthBridgeDisabled = "nested_app_auth_bridge_disabled";
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ClientAuthError.mjs
-var ClientAuthErrorMessages = {
-  [clientInfoDecodingError]: "The client info could not be parsed/decoded correctly",
-  [clientInfoEmptyError]: "The client info was empty",
-  [tokenParsingError]: "Token cannot be parsed",
-  [nullOrEmptyToken]: "The token is null or empty",
-  [endpointResolutionError]: "Endpoints cannot be resolved",
-  [networkError]: "Network request failed",
-  [openIdConfigError]: "Could not retrieve endpoints. Check your authority and verify the .well-known/openid-configuration endpoint returns the required endpoints.",
-  [hashNotDeserialized]: "The hash parameters could not be deserialized",
-  [invalidState]: "State was not the expected format",
-  [stateMismatch]: "State mismatch error",
-  [stateNotFound]: "State not found",
-  [nonceMismatch]: "Nonce mismatch error",
-  [authTimeNotFound]: "Max Age was requested and the ID token is missing the auth_time variable. auth_time is an optional claim and is not enabled by default - it must be enabled. See https://aka.ms/msaljs/optional-claims for more information.",
-  [maxAgeTranspired]: "Max Age is set to 0, or too much time has elapsed since the last end-user authentication.",
-  [multipleMatchingTokens]: "The cache contains multiple tokens satisfying the requirements. Call AcquireToken again providing more requirements such as authority or account.",
-  [multipleMatchingAccounts]: "The cache contains multiple accounts satisfying the given parameters. Please pass more info to obtain the correct account",
-  [multipleMatchingAppMetadata]: "The cache contains multiple appMetadata satisfying the given parameters. Please pass more info to obtain the correct appMetadata",
-  [requestCannotBeMade]: "Token request cannot be made without authorization code or refresh token.",
-  [cannotRemoveEmptyScope]: "Cannot remove null or empty scope from ScopeSet",
-  [cannotAppendScopeSet]: "Cannot append ScopeSet",
-  [emptyInputScopeSet]: "Empty input ScopeSet cannot be processed",
-  [deviceCodePollingCancelled]: "Caller has cancelled token endpoint polling during device code flow by setting DeviceCodeRequest.cancel = true.",
-  [deviceCodeExpired]: "Device code is expired.",
-  [deviceCodeUnknownError]: "Device code stopped polling for unknown reasons.",
-  [noAccountInSilentRequest]: "Please pass an account object, silent flow is not supported without account information",
-  [invalidCacheRecord]: "Cache record object was null or undefined.",
-  [invalidCacheEnvironment]: "Invalid environment when attempting to create cache entry",
-  [noAccountFound]: "No account found in cache for given key.",
-  [noCryptoObject]: "No crypto object detected.",
-  [unexpectedCredentialType]: "Unexpected credential type.",
-  [invalidAssertion]: "Client assertion must meet requirements described in https://tools.ietf.org/html/rfc7515",
-  [invalidClientCredential]: "Client credential (secret, certificate, or assertion) must not be empty when creating a confidential client. An application should at most have one credential",
-  [tokenRefreshRequired]: "Cannot return token from cache because it must be refreshed. This may be due to one of the following reasons: forceRefresh parameter is set to true, claims have been requested, there is no cached access token or it is expired.",
-  [userTimeoutReached]: "User defined timeout for device code polling reached",
-  [tokenClaimsCnfRequiredForSignedJwt]: "Cannot generate a POP jwt if the token_claims are not populated",
-  [authorizationCodeMissingFromServerResponse]: "Server response does not contain an authorization code to proceed",
-  [bindingKeyNotRemoved]: "Could not remove the credential's binding key from storage.",
-  [endSessionEndpointNotSupported]: "The provided authority does not support logout",
-  [keyIdMissing]: "A keyId value is missing from the requested bound token's cache record and is required to match the token to it's stored binding key.",
-  [noNetworkConnectivity]: "No network connectivity. Check your internet connection.",
-  [userCanceled]: "User cancelled the flow.",
-  [missingTenantIdError]: "A tenant id - not common, organizations, or consumers - must be specified when using the client_credentials flow.",
-  [methodNotImplemented]: "This method has not been implemented",
-  [nestedAppAuthBridgeDisabled]: "The nested app auth bridge is disabled"
-};
-var ClientAuthErrorMessage = {
-  clientInfoDecodingError: {
-    code: clientInfoDecodingError,
-    desc: ClientAuthErrorMessages[clientInfoDecodingError]
-  },
-  clientInfoEmptyError: {
-    code: clientInfoEmptyError,
-    desc: ClientAuthErrorMessages[clientInfoEmptyError]
-  },
-  tokenParsingError: {
-    code: tokenParsingError,
-    desc: ClientAuthErrorMessages[tokenParsingError]
-  },
-  nullOrEmptyToken: {
-    code: nullOrEmptyToken,
-    desc: ClientAuthErrorMessages[nullOrEmptyToken]
-  },
-  endpointResolutionError: {
-    code: endpointResolutionError,
-    desc: ClientAuthErrorMessages[endpointResolutionError]
-  },
-  networkError: {
-    code: networkError,
-    desc: ClientAuthErrorMessages[networkError]
-  },
-  unableToGetOpenidConfigError: {
-    code: openIdConfigError,
-    desc: ClientAuthErrorMessages[openIdConfigError]
-  },
-  hashNotDeserialized: {
-    code: hashNotDeserialized,
-    desc: ClientAuthErrorMessages[hashNotDeserialized]
-  },
-  invalidStateError: {
-    code: invalidState,
-    desc: ClientAuthErrorMessages[invalidState]
-  },
-  stateMismatchError: {
-    code: stateMismatch,
-    desc: ClientAuthErrorMessages[stateMismatch]
-  },
-  stateNotFoundError: {
-    code: stateNotFound,
-    desc: ClientAuthErrorMessages[stateNotFound]
-  },
-  nonceMismatchError: {
-    code: nonceMismatch,
-    desc: ClientAuthErrorMessages[nonceMismatch]
-  },
-  authTimeNotFoundError: {
-    code: authTimeNotFound,
-    desc: ClientAuthErrorMessages[authTimeNotFound]
-  },
-  maxAgeTranspired: {
-    code: maxAgeTranspired,
-    desc: ClientAuthErrorMessages[maxAgeTranspired]
-  },
-  multipleMatchingTokens: {
-    code: multipleMatchingTokens,
-    desc: ClientAuthErrorMessages[multipleMatchingTokens]
-  },
-  multipleMatchingAccounts: {
-    code: multipleMatchingAccounts,
-    desc: ClientAuthErrorMessages[multipleMatchingAccounts]
-  },
-  multipleMatchingAppMetadata: {
-    code: multipleMatchingAppMetadata,
-    desc: ClientAuthErrorMessages[multipleMatchingAppMetadata]
-  },
-  tokenRequestCannotBeMade: {
-    code: requestCannotBeMade,
-    desc: ClientAuthErrorMessages[requestCannotBeMade]
-  },
-  removeEmptyScopeError: {
-    code: cannotRemoveEmptyScope,
-    desc: ClientAuthErrorMessages[cannotRemoveEmptyScope]
-  },
-  appendScopeSetError: {
-    code: cannotAppendScopeSet,
-    desc: ClientAuthErrorMessages[cannotAppendScopeSet]
-  },
-  emptyInputScopeSetError: {
-    code: emptyInputScopeSet,
-    desc: ClientAuthErrorMessages[emptyInputScopeSet]
-  },
-  DeviceCodePollingCancelled: {
-    code: deviceCodePollingCancelled,
-    desc: ClientAuthErrorMessages[deviceCodePollingCancelled]
-  },
-  DeviceCodeExpired: {
-    code: deviceCodeExpired,
-    desc: ClientAuthErrorMessages[deviceCodeExpired]
-  },
-  DeviceCodeUnknownError: {
-    code: deviceCodeUnknownError,
-    desc: ClientAuthErrorMessages[deviceCodeUnknownError]
-  },
-  NoAccountInSilentRequest: {
-    code: noAccountInSilentRequest,
-    desc: ClientAuthErrorMessages[noAccountInSilentRequest]
-  },
-  invalidCacheRecord: {
-    code: invalidCacheRecord,
-    desc: ClientAuthErrorMessages[invalidCacheRecord]
-  },
-  invalidCacheEnvironment: {
-    code: invalidCacheEnvironment,
-    desc: ClientAuthErrorMessages[invalidCacheEnvironment]
-  },
-  noAccountFound: {
-    code: noAccountFound,
-    desc: ClientAuthErrorMessages[noAccountFound]
-  },
-  noCryptoObj: {
-    code: noCryptoObject,
-    desc: ClientAuthErrorMessages[noCryptoObject]
-  },
-  unexpectedCredentialType: {
-    code: unexpectedCredentialType,
-    desc: ClientAuthErrorMessages[unexpectedCredentialType]
-  },
-  invalidAssertion: {
-    code: invalidAssertion,
-    desc: ClientAuthErrorMessages[invalidAssertion]
-  },
-  invalidClientCredential: {
-    code: invalidClientCredential,
-    desc: ClientAuthErrorMessages[invalidClientCredential]
-  },
-  tokenRefreshRequired: {
-    code: tokenRefreshRequired,
-    desc: ClientAuthErrorMessages[tokenRefreshRequired]
-  },
-  userTimeoutReached: {
-    code: userTimeoutReached,
-    desc: ClientAuthErrorMessages[userTimeoutReached]
-  },
-  tokenClaimsRequired: {
-    code: tokenClaimsCnfRequiredForSignedJwt,
-    desc: ClientAuthErrorMessages[tokenClaimsCnfRequiredForSignedJwt]
-  },
-  noAuthorizationCodeFromServer: {
-    code: authorizationCodeMissingFromServerResponse,
-    desc: ClientAuthErrorMessages[authorizationCodeMissingFromServerResponse]
-  },
-  bindingKeyNotRemovedError: {
-    code: bindingKeyNotRemoved,
-    desc: ClientAuthErrorMessages[bindingKeyNotRemoved]
-  },
-  logoutNotSupported: {
-    code: endSessionEndpointNotSupported,
-    desc: ClientAuthErrorMessages[endSessionEndpointNotSupported]
-  },
-  keyIdMissing: {
-    code: keyIdMissing,
-    desc: ClientAuthErrorMessages[keyIdMissing]
-  },
-  noNetworkConnectivity: {
-    code: noNetworkConnectivity,
-    desc: ClientAuthErrorMessages[noNetworkConnectivity]
-  },
-  userCanceledError: {
-    code: userCanceled,
-    desc: ClientAuthErrorMessages[userCanceled]
-  },
-  missingTenantIdError: {
-    code: missingTenantIdError,
-    desc: ClientAuthErrorMessages[missingTenantIdError]
-  },
-  nestedAppAuthBridgeDisabled: {
-    code: nestedAppAuthBridgeDisabled,
-    desc: ClientAuthErrorMessages[nestedAppAuthBridgeDisabled]
-  }
-};
-var ClientAuthError = class _ClientAuthError extends AuthError {
-  constructor(errorCode, additionalMessage) {
-    super(errorCode, additionalMessage ? `${ClientAuthErrorMessages[errorCode]}: ${additionalMessage}` : ClientAuthErrorMessages[errorCode]);
-    this.name = "ClientAuthError";
-    Object.setPrototypeOf(this, _ClientAuthError.prototype);
-  }
-};
-function createClientAuthError(errorCode, additionalMessage) {
-  return new ClientAuthError(errorCode, additionalMessage);
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/crypto/ICrypto.mjs
-var DEFAULT_CRYPTO_IMPLEMENTATION = {
-  createNewGuid: () => {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  base64Decode: () => {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  base64Encode: () => {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  base64UrlEncode: () => {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  encodeKid: () => {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  async getPublicKeyThumbprint() {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  async removeTokenBindingKey() {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  async clearKeystore() {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  async signJwt() {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  async hashString() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/logger/Logger.mjs
-var LogLevel;
-(function(LogLevel2) {
-  LogLevel2[LogLevel2["Error"] = 0] = "Error";
-  LogLevel2[LogLevel2["Warning"] = 1] = "Warning";
-  LogLevel2[LogLevel2["Info"] = 2] = "Info";
-  LogLevel2[LogLevel2["Verbose"] = 3] = "Verbose";
-  LogLevel2[LogLevel2["Trace"] = 4] = "Trace";
-})(LogLevel || (LogLevel = {}));
-var Logger = class _Logger {
-  constructor(loggerOptions, packageName, packageVersion) {
-    this.level = LogLevel.Info;
-    const defaultLoggerCallback2 = () => {
-      return;
-    };
-    const setLoggerOptions = loggerOptions || _Logger.createDefaultLoggerOptions();
-    this.localCallback = setLoggerOptions.loggerCallback || defaultLoggerCallback2;
-    this.piiLoggingEnabled = setLoggerOptions.piiLoggingEnabled || false;
-    this.level = typeof setLoggerOptions.logLevel === "number" ? setLoggerOptions.logLevel : LogLevel.Info;
-    this.correlationId = setLoggerOptions.correlationId || Constants.EMPTY_STRING;
-    this.packageName = packageName || Constants.EMPTY_STRING;
-    this.packageVersion = packageVersion || Constants.EMPTY_STRING;
-  }
-  static createDefaultLoggerOptions() {
-    return {
-      loggerCallback: () => {
-      },
-      piiLoggingEnabled: false,
-      logLevel: LogLevel.Info
-    };
-  }
-  /**
-   * Create new Logger with existing configurations.
-   */
-  clone(packageName, packageVersion, correlationId) {
-    return new _Logger({
-      loggerCallback: this.localCallback,
-      piiLoggingEnabled: this.piiLoggingEnabled,
-      logLevel: this.level,
-      correlationId: correlationId || this.correlationId
-    }, packageName, packageVersion);
-  }
-  /**
-   * Log message with required options.
-   */
-  logMessage(logMessage, options) {
-    if (options.logLevel > this.level || !this.piiLoggingEnabled && options.containsPii) {
-      return;
-    }
-    const timestamp = (/* @__PURE__ */ new Date()).toUTCString();
-    const logHeader = `[${timestamp}] : [${options.correlationId || this.correlationId || ""}]`;
-    const log3 = `${logHeader} : ${this.packageName}@${this.packageVersion} : ${LogLevel[options.logLevel]} - ${logMessage}`;
-    this.executeCallback(options.logLevel, log3, options.containsPii || false);
-  }
-  /**
-   * Execute callback with message.
-   */
-  executeCallback(level, message, containsPii) {
-    if (this.localCallback) {
-      this.localCallback(level, message, containsPii);
-    }
-  }
-  /**
-   * Logs error messages.
-   */
-  error(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Error,
-      containsPii: false,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Logs error messages with PII.
-   */
-  errorPii(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Error,
-      containsPii: true,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Logs warning messages.
-   */
-  warning(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Warning,
-      containsPii: false,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Logs warning messages with PII.
-   */
-  warningPii(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Warning,
-      containsPii: true,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Logs info messages.
-   */
-  info(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Info,
-      containsPii: false,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Logs info messages with PII.
-   */
-  infoPii(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Info,
-      containsPii: true,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Logs verbose messages.
-   */
-  verbose(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Verbose,
-      containsPii: false,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Logs verbose messages with PII.
-   */
-  verbosePii(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Verbose,
-      containsPii: true,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Logs trace messages.
-   */
-  trace(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Trace,
-      containsPii: false,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Logs trace messages with PII.
-   */
-  tracePii(message, correlationId) {
-    this.logMessage(message, {
-      logLevel: LogLevel.Trace,
-      containsPii: true,
-      correlationId: correlationId || Constants.EMPTY_STRING
-    });
-  }
-  /**
-   * Returns whether PII Logging is enabled or not.
-   */
-  isPiiLoggingEnabled() {
-    return this.piiLoggingEnabled || false;
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/packageMetadata.mjs
-var name = "@azure/msal-common";
-var version = "15.5.1";
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityOptions.mjs
-var AzureCloudInstance = {
-  // AzureCloudInstance is not specified.
-  None: "none",
-  // Microsoft Azure public cloud
-  AzurePublic: "https://login.microsoftonline.com",
-  // Microsoft PPE
-  AzurePpe: "https://login.windows-ppe.net",
-  // Microsoft Chinese national/regional cloud
-  AzureChina: "https://login.chinacloudapi.cn",
-  // Microsoft German national/regional cloud ("Black Forest")
-  AzureGermany: "https://login.microsoftonline.de",
-  // US Government cloud
-  AzureUsGovernment: "https://login.microsoftonline.us"
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/utils/CacheHelpers.mjs
-var CacheHelpers_exports = {};
-__export(CacheHelpers_exports, {
-  createAccessTokenEntity: () => createAccessTokenEntity,
-  createIdTokenEntity: () => createIdTokenEntity,
-  createRefreshTokenEntity: () => createRefreshTokenEntity,
-  generateAppMetadataKey: () => generateAppMetadataKey,
-  generateAuthorityMetadataExpiresAt: () => generateAuthorityMetadataExpiresAt,
-  generateCredentialKey: () => generateCredentialKey,
-  isAccessTokenEntity: () => isAccessTokenEntity,
-  isAppMetadataEntity: () => isAppMetadataEntity,
-  isAuthorityMetadataEntity: () => isAuthorityMetadataEntity,
-  isAuthorityMetadataExpired: () => isAuthorityMetadataExpired,
-  isCredentialEntity: () => isCredentialEntity,
-  isIdTokenEntity: () => isIdTokenEntity,
-  isRefreshTokenEntity: () => isRefreshTokenEntity,
-  isServerTelemetryEntity: () => isServerTelemetryEntity,
-  isThrottlingEntity: () => isThrottlingEntity,
-  updateAuthorityEndpointMetadata: () => updateAuthorityEndpointMetadata,
-  updateCloudDiscoveryMetadata: () => updateCloudDiscoveryMetadata
-});
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/AuthToken.mjs
-var AuthToken_exports = {};
-__export(AuthToken_exports, {
-  checkMaxAge: () => checkMaxAge,
-  extractTokenClaims: () => extractTokenClaims,
-  getJWSPayload: () => getJWSPayload
-});
-function extractTokenClaims(encodedToken, base64Decode) {
-  const jswPayload = getJWSPayload(encodedToken);
-  try {
-    const base64Decoded = base64Decode(jswPayload);
-    return JSON.parse(base64Decoded);
-  } catch (err) {
-    throw createClientAuthError(tokenParsingError);
-  }
-}
-function getJWSPayload(authToken) {
-  if (!authToken) {
-    throw createClientAuthError(nullOrEmptyToken);
-  }
-  const tokenPartsRegex = /^([^\.\s]*)\.([^\.\s]+)\.([^\.\s]*)$/;
-  const matches = tokenPartsRegex.exec(authToken);
-  if (!matches || matches.length < 4) {
-    throw createClientAuthError(tokenParsingError);
-  }
-  return matches[2];
-}
-function checkMaxAge(authTime, maxAge) {
-  const fiveMinuteSkew = 3e5;
-  if (maxAge === 0 || Date.now() - fiveMinuteSkew > authTime + maxAge) {
-    throw createClientAuthError(maxAgeTranspired);
-  }
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/TimeUtils.mjs
-var TimeUtils_exports = {};
-__export(TimeUtils_exports, {
-  delay: () => delay,
-  isTokenExpired: () => isTokenExpired,
-  nowSeconds: () => nowSeconds,
-  toDateFromSeconds: () => toDateFromSeconds,
-  toSecondsFromDate: () => toSecondsFromDate,
-  wasClockTurnedBack: () => wasClockTurnedBack
-});
-function nowSeconds() {
-  return Math.round((/* @__PURE__ */ new Date()).getTime() / 1e3);
-}
-function toSecondsFromDate(date) {
-  return date.getTime() / 1e3;
-}
-function toDateFromSeconds(seconds) {
-  if (seconds) {
-    return new Date(Number(seconds) * 1e3);
-  }
-  return /* @__PURE__ */ new Date();
-}
-function isTokenExpired(expiresOn, offset) {
-  const expirationSec = Number(expiresOn) || 0;
-  const offsetCurrentTimeSec = nowSeconds() + offset;
-  return offsetCurrentTimeSec > expirationSec;
-}
-function wasClockTurnedBack(cachedAt) {
-  const cachedAtSec = Number(cachedAt);
-  return cachedAtSec > nowSeconds();
-}
-function delay(t, value) {
-  return new Promise((resolve) => setTimeout(() => resolve(value), t));
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/utils/CacheHelpers.mjs
-function generateCredentialKey(credentialEntity) {
-  const credentialKey = [
-    generateAccountId(credentialEntity),
-    generateCredentialId(credentialEntity),
-    generateTarget(credentialEntity),
-    generateClaimsHash(credentialEntity),
-    generateScheme(credentialEntity)
-  ];
-  return credentialKey.join(Separators.CACHE_KEY_SEPARATOR).toLowerCase();
-}
-function createIdTokenEntity(homeAccountId, environment, idToken, clientId, tenantId) {
-  const idTokenEntity = {
-    credentialType: CredentialType.ID_TOKEN,
-    homeAccountId,
-    environment,
-    clientId,
-    secret: idToken,
-    realm: tenantId
-  };
-  return idTokenEntity;
-}
-function createAccessTokenEntity(homeAccountId, environment, accessToken, clientId, tenantId, scopes, expiresOn, extExpiresOn, base64Decode, refreshOn, tokenType, userAssertionHash, keyId, requestedClaims, requestedClaimsHash) {
-  const atEntity = {
-    homeAccountId,
-    credentialType: CredentialType.ACCESS_TOKEN,
-    secret: accessToken,
-    cachedAt: nowSeconds().toString(),
-    expiresOn: expiresOn.toString(),
-    extendedExpiresOn: extExpiresOn.toString(),
-    environment,
-    clientId,
-    realm: tenantId,
-    target: scopes,
-    tokenType: tokenType || AuthenticationScheme.BEARER
-  };
-  if (userAssertionHash) {
-    atEntity.userAssertionHash = userAssertionHash;
-  }
-  if (refreshOn) {
-    atEntity.refreshOn = refreshOn.toString();
-  }
-  if (requestedClaims) {
-    atEntity.requestedClaims = requestedClaims;
-    atEntity.requestedClaimsHash = requestedClaimsHash;
-  }
-  if (atEntity.tokenType?.toLowerCase() !== AuthenticationScheme.BEARER.toLowerCase()) {
-    atEntity.credentialType = CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME;
-    switch (atEntity.tokenType) {
-      case AuthenticationScheme.POP:
-        const tokenClaims = extractTokenClaims(accessToken, base64Decode);
-        if (!tokenClaims?.cnf?.kid) {
-          throw createClientAuthError(tokenClaimsCnfRequiredForSignedJwt);
-        }
-        atEntity.keyId = tokenClaims.cnf.kid;
-        break;
-      case AuthenticationScheme.SSH:
-        atEntity.keyId = keyId;
-    }
-  }
-  return atEntity;
-}
-function createRefreshTokenEntity(homeAccountId, environment, refreshToken, clientId, familyId, userAssertionHash, expiresOn) {
-  const rtEntity = {
-    credentialType: CredentialType.REFRESH_TOKEN,
-    homeAccountId,
-    environment,
-    clientId,
-    secret: refreshToken
-  };
-  if (userAssertionHash) {
-    rtEntity.userAssertionHash = userAssertionHash;
-  }
-  if (familyId) {
-    rtEntity.familyId = familyId;
-  }
-  if (expiresOn) {
-    rtEntity.expiresOn = expiresOn.toString();
-  }
-  return rtEntity;
-}
-function isCredentialEntity(entity) {
-  return entity.hasOwnProperty("homeAccountId") && entity.hasOwnProperty("environment") && entity.hasOwnProperty("credentialType") && entity.hasOwnProperty("clientId") && entity.hasOwnProperty("secret");
-}
-function isAccessTokenEntity(entity) {
-  if (!entity) {
-    return false;
-  }
-  return isCredentialEntity(entity) && entity.hasOwnProperty("realm") && entity.hasOwnProperty("target") && (entity["credentialType"] === CredentialType.ACCESS_TOKEN || entity["credentialType"] === CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME);
-}
-function isIdTokenEntity(entity) {
-  if (!entity) {
-    return false;
-  }
-  return isCredentialEntity(entity) && entity.hasOwnProperty("realm") && entity["credentialType"] === CredentialType.ID_TOKEN;
-}
-function isRefreshTokenEntity(entity) {
-  if (!entity) {
-    return false;
-  }
-  return isCredentialEntity(entity) && entity["credentialType"] === CredentialType.REFRESH_TOKEN;
-}
-function generateAccountId(credentialEntity) {
-  const accountId = [
-    credentialEntity.homeAccountId,
-    credentialEntity.environment
-  ];
-  return accountId.join(Separators.CACHE_KEY_SEPARATOR).toLowerCase();
-}
-function generateCredentialId(credentialEntity) {
-  const clientOrFamilyId = credentialEntity.credentialType === CredentialType.REFRESH_TOKEN ? credentialEntity.familyId || credentialEntity.clientId : credentialEntity.clientId;
-  const credentialId = [
-    credentialEntity.credentialType,
-    clientOrFamilyId,
-    credentialEntity.realm || ""
-  ];
-  return credentialId.join(Separators.CACHE_KEY_SEPARATOR).toLowerCase();
-}
-function generateTarget(credentialEntity) {
-  return (credentialEntity.target || "").toLowerCase();
-}
-function generateClaimsHash(credentialEntity) {
-  return (credentialEntity.requestedClaimsHash || "").toLowerCase();
-}
-function generateScheme(credentialEntity) {
-  return credentialEntity.tokenType && credentialEntity.tokenType.toLowerCase() !== AuthenticationScheme.BEARER.toLowerCase() ? credentialEntity.tokenType.toLowerCase() : "";
-}
-function isServerTelemetryEntity(key, entity) {
-  const validateKey = key.indexOf(SERVER_TELEM_CONSTANTS.CACHE_KEY) === 0;
-  let validateEntity = true;
-  if (entity) {
-    validateEntity = entity.hasOwnProperty("failedRequests") && entity.hasOwnProperty("errors") && entity.hasOwnProperty("cacheHits");
-  }
-  return validateKey && validateEntity;
-}
-function isThrottlingEntity(key, entity) {
-  let validateKey = false;
-  if (key) {
-    validateKey = key.indexOf(ThrottlingConstants.THROTTLING_PREFIX) === 0;
-  }
-  let validateEntity = true;
-  if (entity) {
-    validateEntity = entity.hasOwnProperty("throttleTime");
-  }
-  return validateKey && validateEntity;
-}
-function generateAppMetadataKey({ environment, clientId }) {
-  const appMetaDataKeyArray = [
-    APP_METADATA,
-    environment,
-    clientId
-  ];
-  return appMetaDataKeyArray.join(Separators.CACHE_KEY_SEPARATOR).toLowerCase();
-}
-function isAppMetadataEntity(key, entity) {
-  if (!entity) {
-    return false;
-  }
-  return key.indexOf(APP_METADATA) === 0 && entity.hasOwnProperty("clientId") && entity.hasOwnProperty("environment");
-}
-function isAuthorityMetadataEntity(key, entity) {
-  if (!entity) {
-    return false;
-  }
-  return key.indexOf(AUTHORITY_METADATA_CONSTANTS.CACHE_KEY) === 0 && entity.hasOwnProperty("aliases") && entity.hasOwnProperty("preferred_cache") && entity.hasOwnProperty("preferred_network") && entity.hasOwnProperty("canonical_authority") && entity.hasOwnProperty("authorization_endpoint") && entity.hasOwnProperty("token_endpoint") && entity.hasOwnProperty("issuer") && entity.hasOwnProperty("aliasesFromNetwork") && entity.hasOwnProperty("endpointsFromNetwork") && entity.hasOwnProperty("expiresAt") && entity.hasOwnProperty("jwks_uri");
-}
-function generateAuthorityMetadataExpiresAt() {
-  return nowSeconds() + AUTHORITY_METADATA_CONSTANTS.REFRESH_TIME_SECONDS;
-}
-function updateAuthorityEndpointMetadata(authorityMetadata, updatedValues, fromNetwork) {
-  authorityMetadata.authorization_endpoint = updatedValues.authorization_endpoint;
-  authorityMetadata.token_endpoint = updatedValues.token_endpoint;
-  authorityMetadata.end_session_endpoint = updatedValues.end_session_endpoint;
-  authorityMetadata.issuer = updatedValues.issuer;
-  authorityMetadata.endpointsFromNetwork = fromNetwork;
-  authorityMetadata.jwks_uri = updatedValues.jwks_uri;
-}
-function updateCloudDiscoveryMetadata(authorityMetadata, updatedValues, fromNetwork) {
-  authorityMetadata.aliases = updatedValues.aliases;
-  authorityMetadata.preferred_cache = updatedValues.preferred_cache;
-  authorityMetadata.preferred_network = updatedValues.preferred_network;
-  authorityMetadata.aliasesFromNetwork = fromNetwork;
-}
-function isAuthorityMetadataExpired(metadata) {
-  return metadata.expiresAt <= nowSeconds();
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ClientConfigurationErrorCodes.mjs
-var ClientConfigurationErrorCodes_exports = {};
-__export(ClientConfigurationErrorCodes_exports, {
-  authorityMismatch: () => authorityMismatch,
-  authorityUriInsecure: () => authorityUriInsecure,
-  cannotAllowPlatformBroker: () => cannotAllowPlatformBroker,
-  cannotSetOIDCOptions: () => cannotSetOIDCOptions,
-  claimsRequestParsingError: () => claimsRequestParsingError,
-  emptyInputScopesError: () => emptyInputScopesError,
-  invalidAuthenticationHeader: () => invalidAuthenticationHeader,
-  invalidAuthorityMetadata: () => invalidAuthorityMetadata,
-  invalidClaims: () => invalidClaims,
-  invalidCloudDiscoveryMetadata: () => invalidCloudDiscoveryMetadata,
-  invalidCodeChallengeMethod: () => invalidCodeChallengeMethod,
-  invalidPromptValue: () => invalidPromptValue,
-  logoutRequestEmpty: () => logoutRequestEmpty,
-  missingNonceAuthenticationHeader: () => missingNonceAuthenticationHeader,
-  missingSshJwk: () => missingSshJwk,
-  missingSshKid: () => missingSshKid,
-  pkceParamsMissing: () => pkceParamsMissing,
-  redirectUriEmpty: () => redirectUriEmpty,
-  tokenRequestEmpty: () => tokenRequestEmpty,
-  untrustedAuthority: () => untrustedAuthority,
-  urlEmptyError: () => urlEmptyError,
-  urlParseError: () => urlParseError
-});
-var redirectUriEmpty = "redirect_uri_empty";
-var claimsRequestParsingError = "claims_request_parsing_error";
-var authorityUriInsecure = "authority_uri_insecure";
-var urlParseError = "url_parse_error";
-var urlEmptyError = "empty_url_error";
-var emptyInputScopesError = "empty_input_scopes_error";
-var invalidPromptValue = "invalid_prompt_value";
-var invalidClaims = "invalid_claims";
-var tokenRequestEmpty = "token_request_empty";
-var logoutRequestEmpty = "logout_request_empty";
-var invalidCodeChallengeMethod = "invalid_code_challenge_method";
-var pkceParamsMissing = "pkce_params_missing";
-var invalidCloudDiscoveryMetadata = "invalid_cloud_discovery_metadata";
-var invalidAuthorityMetadata = "invalid_authority_metadata";
-var untrustedAuthority = "untrusted_authority";
-var missingSshJwk = "missing_ssh_jwk";
-var missingSshKid = "missing_ssh_kid";
-var missingNonceAuthenticationHeader = "missing_nonce_authentication_header";
-var invalidAuthenticationHeader = "invalid_authentication_header";
-var cannotSetOIDCOptions = "cannot_set_OIDCOptions";
-var cannotAllowPlatformBroker = "cannot_allow_platform_broker";
-var authorityMismatch = "authority_mismatch";
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ClientConfigurationError.mjs
-var ClientConfigurationErrorMessages = {
-  [redirectUriEmpty]: "A redirect URI is required for all calls, and none has been set.",
-  [claimsRequestParsingError]: "Could not parse the given claims request object.",
-  [authorityUriInsecure]: "Authority URIs must use https.  Please see here for valid authority configuration options: https://docs.microsoft.com/en-us/azure/active-directory/develop/msal-js-initializing-client-applications#configuration-options",
-  [urlParseError]: "URL could not be parsed into appropriate segments.",
-  [urlEmptyError]: "URL was empty or null.",
-  [emptyInputScopesError]: "Scopes cannot be passed as null, undefined or empty array because they are required to obtain an access token.",
-  [invalidPromptValue]: "Please see here for valid configuration options: https://azuread.github.io/microsoft-authentication-library-for-js/ref/modules/_azure_msal_common.html#commonauthorizationurlrequest",
-  [invalidClaims]: "Given claims parameter must be a stringified JSON object.",
-  [tokenRequestEmpty]: "Token request was empty and not found in cache.",
-  [logoutRequestEmpty]: "The logout request was null or undefined.",
-  [invalidCodeChallengeMethod]: 'code_challenge_method passed is invalid. Valid values are "plain" and "S256".',
-  [pkceParamsMissing]: "Both params: code_challenge and code_challenge_method are to be passed if to be sent in the request",
-  [invalidCloudDiscoveryMetadata]: "Invalid cloudDiscoveryMetadata provided. Must be a stringified JSON object containing tenant_discovery_endpoint and metadata fields",
-  [invalidAuthorityMetadata]: "Invalid authorityMetadata provided. Must by a stringified JSON object containing authorization_endpoint, token_endpoint, issuer fields.",
-  [untrustedAuthority]: "The provided authority is not a trusted authority. Please include this authority in the knownAuthorities config parameter.",
-  [missingSshJwk]: "Missing sshJwk in SSH certificate request. A stringified JSON Web Key is required when using the SSH authentication scheme.",
-  [missingSshKid]: "Missing sshKid in SSH certificate request. A string that uniquely identifies the public SSH key is required when using the SSH authentication scheme.",
-  [missingNonceAuthenticationHeader]: "Unable to find an authentication header containing server nonce. Either the Authentication-Info or WWW-Authenticate headers must be present in order to obtain a server nonce.",
-  [invalidAuthenticationHeader]: "Invalid authentication header provided",
-  [cannotSetOIDCOptions]: "Cannot set OIDCOptions parameter. Please change the protocol mode to OIDC or use a non-Microsoft authority.",
-  [cannotAllowPlatformBroker]: "Cannot set allowPlatformBroker parameter to true when not in AAD protocol mode.",
-  [authorityMismatch]: "Authority mismatch error. Authority provided in login request or PublicClientApplication config does not match the environment of the provided account. Please use a matching account or make an interactive request to login to this authority."
-};
-var ClientConfigurationErrorMessage = {
-  redirectUriNotSet: {
-    code: redirectUriEmpty,
-    desc: ClientConfigurationErrorMessages[redirectUriEmpty]
-  },
-  claimsRequestParsingError: {
-    code: claimsRequestParsingError,
-    desc: ClientConfigurationErrorMessages[claimsRequestParsingError]
-  },
-  authorityUriInsecure: {
-    code: authorityUriInsecure,
-    desc: ClientConfigurationErrorMessages[authorityUriInsecure]
-  },
-  urlParseError: {
-    code: urlParseError,
-    desc: ClientConfigurationErrorMessages[urlParseError]
-  },
-  urlEmptyError: {
-    code: urlEmptyError,
-    desc: ClientConfigurationErrorMessages[urlEmptyError]
-  },
-  emptyScopesError: {
-    code: emptyInputScopesError,
-    desc: ClientConfigurationErrorMessages[emptyInputScopesError]
-  },
-  invalidPrompt: {
-    code: invalidPromptValue,
-    desc: ClientConfigurationErrorMessages[invalidPromptValue]
-  },
-  invalidClaimsRequest: {
-    code: invalidClaims,
-    desc: ClientConfigurationErrorMessages[invalidClaims]
-  },
-  tokenRequestEmptyError: {
-    code: tokenRequestEmpty,
-    desc: ClientConfigurationErrorMessages[tokenRequestEmpty]
-  },
-  logoutRequestEmptyError: {
-    code: logoutRequestEmpty,
-    desc: ClientConfigurationErrorMessages[logoutRequestEmpty]
-  },
-  invalidCodeChallengeMethod: {
-    code: invalidCodeChallengeMethod,
-    desc: ClientConfigurationErrorMessages[invalidCodeChallengeMethod]
-  },
-  invalidCodeChallengeParams: {
-    code: pkceParamsMissing,
-    desc: ClientConfigurationErrorMessages[pkceParamsMissing]
-  },
-  invalidCloudDiscoveryMetadata: {
-    code: invalidCloudDiscoveryMetadata,
-    desc: ClientConfigurationErrorMessages[invalidCloudDiscoveryMetadata]
-  },
-  invalidAuthorityMetadata: {
-    code: invalidAuthorityMetadata,
-    desc: ClientConfigurationErrorMessages[invalidAuthorityMetadata]
-  },
-  untrustedAuthority: {
-    code: untrustedAuthority,
-    desc: ClientConfigurationErrorMessages[untrustedAuthority]
-  },
-  missingSshJwk: {
-    code: missingSshJwk,
-    desc: ClientConfigurationErrorMessages[missingSshJwk]
-  },
-  missingSshKid: {
-    code: missingSshKid,
-    desc: ClientConfigurationErrorMessages[missingSshKid]
-  },
-  missingNonceAuthenticationHeader: {
-    code: missingNonceAuthenticationHeader,
-    desc: ClientConfigurationErrorMessages[missingNonceAuthenticationHeader]
-  },
-  invalidAuthenticationHeader: {
-    code: invalidAuthenticationHeader,
-    desc: ClientConfigurationErrorMessages[invalidAuthenticationHeader]
-  },
-  cannotSetOIDCOptions: {
-    code: cannotSetOIDCOptions,
-    desc: ClientConfigurationErrorMessages[cannotSetOIDCOptions]
-  },
-  cannotAllowPlatformBroker: {
-    code: cannotAllowPlatformBroker,
-    desc: ClientConfigurationErrorMessages[cannotAllowPlatformBroker]
-  },
-  authorityMismatch: {
-    code: authorityMismatch,
-    desc: ClientConfigurationErrorMessages[authorityMismatch]
-  }
-};
+// node_modules/@azure/msal-common/dist/error/ClientConfigurationError.mjs
 var ClientConfigurationError = class _ClientConfigurationError extends AuthError {
   constructor(errorCode) {
-    super(errorCode, ClientConfigurationErrorMessages[errorCode]);
+    super(errorCode);
     this.name = "ClientConfigurationError";
     Object.setPrototypeOf(this, _ClientConfigurationError.prototype);
   }
@@ -32235,7 +32589,7 @@ function createClientConfigurationError(errorCode) {
   return new ClientConfigurationError(errorCode);
 }
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/StringUtils.mjs
+// node_modules/@azure/msal-common/dist/utils/StringUtils.mjs
 var StringUtils = class {
   /**
    * Check if stringified object is empty
@@ -32304,18 +32658,153 @@ var StringUtils = class {
       return null;
     }
   }
-  /**
-   * Tests if a given string matches a given pattern, with support for wildcards and queries.
-   * @param pattern Wildcard pattern to string match. Supports "*" for wildcards and "?" for queries
-   * @param input String to match against
-   */
-  static matchPattern(pattern, input) {
-    const regex = new RegExp(pattern.replace(/\\/g, "\\\\").replace(/\*/g, "[^ ]*").replace(/\?/g, "\\?"));
-    return regex.test(input);
-  }
 };
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/request/ScopeSet.mjs
+// node_modules/@azure/msal-common/dist/error/ClientAuthError.mjs
+var ClientAuthError = class _ClientAuthError extends AuthError {
+  constructor(errorCode, additionalMessage) {
+    super(errorCode, additionalMessage);
+    this.name = "ClientAuthError";
+    Object.setPrototypeOf(this, _ClientAuthError.prototype);
+  }
+};
+function createClientAuthError(errorCode, additionalMessage) {
+  return new ClientAuthError(errorCode, additionalMessage);
+}
+
+// node_modules/@azure/msal-common/dist/error/ClientConfigurationErrorCodes.mjs
+var ClientConfigurationErrorCodes_exports = {};
+__export(ClientConfigurationErrorCodes_exports, {
+  authorityMismatch: () => authorityMismatch,
+  authorityUriInsecure: () => authorityUriInsecure,
+  cannotAllowPlatformBroker: () => cannotAllowPlatformBroker,
+  cannotSetOIDCOptions: () => cannotSetOIDCOptions,
+  claimsRequestParsingError: () => claimsRequestParsingError,
+  emptyInputScopesError: () => emptyInputScopesError,
+  invalidAuthenticationHeader: () => invalidAuthenticationHeader,
+  invalidAuthorityMetadata: () => invalidAuthorityMetadata,
+  invalidClaims: () => invalidClaims,
+  invalidCloudDiscoveryMetadata: () => invalidCloudDiscoveryMetadata,
+  invalidCodeChallengeMethod: () => invalidCodeChallengeMethod,
+  invalidRequestMethodForEAR: () => invalidRequestMethodForEAR,
+  logoutRequestEmpty: () => logoutRequestEmpty,
+  missingNonceAuthenticationHeader: () => missingNonceAuthenticationHeader,
+  missingSshJwk: () => missingSshJwk,
+  missingSshKid: () => missingSshKid,
+  pkceParamsMissing: () => pkceParamsMissing,
+  redirectUriEmpty: () => redirectUriEmpty,
+  tokenRequestEmpty: () => tokenRequestEmpty,
+  untrustedAuthority: () => untrustedAuthority,
+  urlEmptyError: () => urlEmptyError,
+  urlParseError: () => urlParseError
+});
+var redirectUriEmpty = "redirect_uri_empty";
+var claimsRequestParsingError = "claims_request_parsing_error";
+var authorityUriInsecure = "authority_uri_insecure";
+var urlParseError = "url_parse_error";
+var urlEmptyError = "empty_url_error";
+var emptyInputScopesError = "empty_input_scopes_error";
+var invalidClaims = "invalid_claims";
+var tokenRequestEmpty = "token_request_empty";
+var logoutRequestEmpty = "logout_request_empty";
+var invalidCodeChallengeMethod = "invalid_code_challenge_method";
+var pkceParamsMissing = "pkce_params_missing";
+var invalidCloudDiscoveryMetadata = "invalid_cloud_discovery_metadata";
+var invalidAuthorityMetadata = "invalid_authority_metadata";
+var untrustedAuthority = "untrusted_authority";
+var missingSshJwk = "missing_ssh_jwk";
+var missingSshKid = "missing_ssh_kid";
+var missingNonceAuthenticationHeader = "missing_nonce_authentication_header";
+var invalidAuthenticationHeader = "invalid_authentication_header";
+var cannotSetOIDCOptions = "cannot_set_OIDCOptions";
+var cannotAllowPlatformBroker = "cannot_allow_platform_broker";
+var authorityMismatch = "authority_mismatch";
+var invalidRequestMethodForEAR = "invalid_request_method_for_EAR";
+
+// node_modules/@azure/msal-common/dist/error/ClientAuthErrorCodes.mjs
+var ClientAuthErrorCodes_exports = {};
+__export(ClientAuthErrorCodes_exports, {
+  authTimeNotFound: () => authTimeNotFound,
+  authorizationCodeMissingFromServerResponse: () => authorizationCodeMissingFromServerResponse,
+  bindingKeyNotRemoved: () => bindingKeyNotRemoved,
+  cannotAppendScopeSet: () => cannotAppendScopeSet,
+  cannotRemoveEmptyScope: () => cannotRemoveEmptyScope,
+  clientInfoDecodingError: () => clientInfoDecodingError,
+  clientInfoEmptyError: () => clientInfoEmptyError,
+  emptyInputScopeSet: () => emptyInputScopeSet,
+  endSessionEndpointNotSupported: () => endSessionEndpointNotSupported,
+  endpointResolutionError: () => endpointResolutionError,
+  hashNotDeserialized: () => hashNotDeserialized,
+  invalidCacheEnvironment: () => invalidCacheEnvironment,
+  invalidCacheRecord: () => invalidCacheRecord,
+  invalidState: () => invalidState,
+  keyIdMissing: () => keyIdMissing,
+  maxAgeTranspired: () => maxAgeTranspired,
+  methodNotImplemented: () => methodNotImplemented,
+  misplacedResourceParam: () => misplacedResourceParam,
+  multipleMatchingAppMetadata: () => multipleMatchingAppMetadata,
+  multipleMatchingTokens: () => multipleMatchingTokens,
+  nestedAppAuthBridgeDisabled: () => nestedAppAuthBridgeDisabled,
+  networkError: () => networkError,
+  noAccountFound: () => noAccountFound,
+  noAccountInSilentRequest: () => noAccountInSilentRequest,
+  noCryptoObject: () => noCryptoObject,
+  noNetworkConnectivity: () => noNetworkConnectivity,
+  nonceMismatch: () => nonceMismatch,
+  nullOrEmptyToken: () => nullOrEmptyToken,
+  openIdConfigError: () => openIdConfigError,
+  platformBrokerError: () => platformBrokerError,
+  requestCannotBeMade: () => requestCannotBeMade,
+  resourceParameterRequired: () => resourceParameterRequired,
+  stateMismatch: () => stateMismatch,
+  stateNotFound: () => stateNotFound,
+  tokenClaimsCnfRequiredForSignedJwt: () => tokenClaimsCnfRequiredForSignedJwt,
+  tokenParsingError: () => tokenParsingError,
+  tokenRefreshRequired: () => tokenRefreshRequired,
+  unexpectedCredentialType: () => unexpectedCredentialType,
+  userCanceled: () => userCanceled
+});
+var clientInfoDecodingError = "client_info_decoding_error";
+var clientInfoEmptyError = "client_info_empty_error";
+var tokenParsingError = "token_parsing_error";
+var nullOrEmptyToken = "null_or_empty_token";
+var endpointResolutionError = "endpoints_resolution_error";
+var networkError = "network_error";
+var openIdConfigError = "openid_config_error";
+var hashNotDeserialized = "hash_not_deserialized";
+var invalidState = "invalid_state";
+var stateMismatch = "state_mismatch";
+var stateNotFound = "state_not_found";
+var nonceMismatch = "nonce_mismatch";
+var authTimeNotFound = "auth_time_not_found";
+var maxAgeTranspired = "max_age_transpired";
+var multipleMatchingTokens = "multiple_matching_tokens";
+var multipleMatchingAppMetadata = "multiple_matching_appMetadata";
+var requestCannotBeMade = "request_cannot_be_made";
+var cannotRemoveEmptyScope = "cannot_remove_empty_scope";
+var cannotAppendScopeSet = "cannot_append_scopeset";
+var emptyInputScopeSet = "empty_input_scopeset";
+var noAccountInSilentRequest = "no_account_in_silent_request";
+var invalidCacheRecord = "invalid_cache_record";
+var invalidCacheEnvironment = "invalid_cache_environment";
+var noAccountFound = "no_account_found";
+var noCryptoObject = "no_crypto_object";
+var unexpectedCredentialType = "unexpected_credential_type";
+var tokenRefreshRequired = "token_refresh_required";
+var tokenClaimsCnfRequiredForSignedJwt = "token_claims_cnf_required_for_signedjwt";
+var authorizationCodeMissingFromServerResponse = "authorization_code_missing_from_server_response";
+var bindingKeyNotRemoved = "binding_key_not_removed";
+var endSessionEndpointNotSupported = "end_session_endpoint_not_supported";
+var keyIdMissing = "key_id_missing";
+var noNetworkConnectivity = "no_network_connectivity";
+var userCanceled = "user_canceled";
+var methodNotImplemented = "method_not_implemented";
+var nestedAppAuthBridgeDisabled = "nested_app_auth_bridge_disabled";
+var platformBrokerError = "platform_broker_error";
+var resourceParameterRequired = "resource_parameter_required";
+var misplacedResourceParam = "misplaced_resource_parameter";
+
+// node_modules/@azure/msal-common/dist/request/ScopeSet.mjs
 var ScopeSet = class _ScopeSet {
   constructor(inputScopes) {
     const scopeArr = inputScopes ? StringUtils.trimArrayEntries([...inputScopes]) : [];
@@ -32333,7 +32822,7 @@ var ScopeSet = class _ScopeSet {
    * @param scopesRequired
    */
   static fromString(inputScopeString) {
-    const scopeString = inputScopeString || Constants.EMPTY_STRING;
+    const scopeString = inputScopeString || "";
     const inputScopes = scopeString.split(" ");
     return new _ScopeSet(inputScopes);
   }
@@ -32343,11 +32832,12 @@ var ScopeSet = class _ScopeSet {
    * @returns
    */
   static createSearchScopes(inputScopeString) {
-    const scopeSet = new _ScopeSet(inputScopeString);
+    const scopesToUse = inputScopeString && inputScopeString.length > 0 ? inputScopeString : [...OIDC_DEFAULT_SCOPES];
+    const scopeSet = new _ScopeSet(scopesToUse);
     if (!scopeSet.containsOnlyOIDCScopes()) {
       scopeSet.removeOIDCScopes();
     } else {
-      scopeSet.removeScope(Constants.OFFLINE_ACCESS_SCOPE);
+      scopeSet.removeScope(OFFLINE_ACCESS_SCOPE);
     }
     return scopeSet;
   }
@@ -32473,7 +32963,7 @@ var ScopeSet = class _ScopeSet {
       const scopeArr = this.asArray();
       return scopeArr.join(" ");
     }
-    return Constants.EMPTY_STRING;
+    return "";
   }
   /**
    * Prints scopes into a space-delimited lower-case string (used for caching)
@@ -32483,1878 +32973,7 @@ var ScopeSet = class _ScopeSet {
   }
 };
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/ClientInfo.mjs
-function buildClientInfo(rawClientInfo, base64Decode) {
-  if (!rawClientInfo) {
-    throw createClientAuthError(clientInfoEmptyError);
-  }
-  try {
-    const decodedClientInfo = base64Decode(rawClientInfo);
-    return JSON.parse(decodedClientInfo);
-  } catch (e) {
-    throw createClientAuthError(clientInfoDecodingError);
-  }
-}
-function buildClientInfoFromHomeAccountId(homeAccountId) {
-  if (!homeAccountId) {
-    throw createClientAuthError(clientInfoDecodingError);
-  }
-  const clientInfoParts = homeAccountId.split(Separators.CLIENT_INFO_SEPARATOR, 2);
-  return {
-    uid: clientInfoParts[0],
-    utid: clientInfoParts.length < 2 ? Constants.EMPTY_STRING : clientInfoParts[1]
-  };
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/AccountInfo.mjs
-function tenantIdMatchesHomeTenant(tenantId, homeAccountId) {
-  return !!tenantId && !!homeAccountId && tenantId === homeAccountId.split(".")[1];
-}
-function buildTenantProfile(homeAccountId, localAccountId, tenantId, idTokenClaims) {
-  if (idTokenClaims) {
-    const { oid, sub, tid, name: name3, tfp, acr } = idTokenClaims;
-    const tenantId2 = tid || tfp || acr || "";
-    return {
-      tenantId: tenantId2,
-      localAccountId: oid || sub || "",
-      name: name3,
-      isHomeTenant: tenantIdMatchesHomeTenant(tenantId2, homeAccountId)
-    };
-  } else {
-    return {
-      tenantId,
-      localAccountId,
-      isHomeTenant: tenantIdMatchesHomeTenant(tenantId, homeAccountId)
-    };
-  }
-}
-function updateAccountTenantProfileData(baseAccountInfo, tenantProfile, idTokenClaims, idTokenSecret) {
-  let updatedAccountInfo = baseAccountInfo;
-  if (tenantProfile) {
-    const { isHomeTenant, ...tenantProfileOverride } = tenantProfile;
-    updatedAccountInfo = { ...baseAccountInfo, ...tenantProfileOverride };
-  }
-  if (idTokenClaims) {
-    const { isHomeTenant, ...claimsSourcedTenantProfile } = buildTenantProfile(baseAccountInfo.homeAccountId, baseAccountInfo.localAccountId, baseAccountInfo.tenantId, idTokenClaims);
-    updatedAccountInfo = {
-      ...updatedAccountInfo,
-      ...claimsSourcedTenantProfile,
-      idTokenClaims,
-      idToken: idTokenSecret
-    };
-    return updatedAccountInfo;
-  }
-  return updatedAccountInfo;
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityType.mjs
-var AuthorityType = {
-  Default: 0,
-  Adfs: 1,
-  Dsts: 2,
-  Ciam: 3
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/TokenClaims.mjs
-function getTenantIdFromIdTokenClaims(idTokenClaims) {
-  if (idTokenClaims) {
-    const tenantId = idTokenClaims.tid || idTokenClaims.tfp || idTokenClaims.acr;
-    return tenantId || null;
-  }
-  return null;
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/ProtocolMode.mjs
-var ProtocolMode = {
-  /**
-   * Auth Code + PKCE with Entra ID (formerly AAD) specific optimizations and features
-   */
-  AAD: "AAD",
-  /**
-   * Auth Code + PKCE without Entra ID specific optimizations and features. For use only with non-Microsoft owned authorities.
-   * Support is limited for this mode.
-   */
-  OIDC: "OIDC",
-  /**
-   * Encrypted Authorize Response (EAR) with Entra ID specific optimizations and features
-   */
-  EAR: "EAR"
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/entities/AccountEntity.mjs
-var AccountEntity = class _AccountEntity {
-  /**
-   * Generate Account Id key component as per the schema: <home_account_id>-<environment>
-   */
-  generateAccountId() {
-    const accountId = [this.homeAccountId, this.environment];
-    return accountId.join(Separators.CACHE_KEY_SEPARATOR).toLowerCase();
-  }
-  /**
-   * Generate Account Cache Key as per the schema: <home_account_id>-<environment>-<realm*>
-   */
-  generateAccountKey() {
-    return _AccountEntity.generateAccountCacheKey({
-      homeAccountId: this.homeAccountId,
-      environment: this.environment,
-      tenantId: this.realm,
-      username: this.username,
-      localAccountId: this.localAccountId
-    });
-  }
-  /**
-   * Returns the AccountInfo interface for this account.
-   */
-  getAccountInfo() {
-    return {
-      homeAccountId: this.homeAccountId,
-      environment: this.environment,
-      tenantId: this.realm,
-      username: this.username,
-      localAccountId: this.localAccountId,
-      name: this.name,
-      nativeAccountId: this.nativeAccountId,
-      authorityType: this.authorityType,
-      // Deserialize tenant profiles array into a Map
-      tenantProfiles: new Map((this.tenantProfiles || []).map((tenantProfile) => {
-        return [tenantProfile.tenantId, tenantProfile];
-      }))
-    };
-  }
-  /**
-   * Returns true if the account entity is in single tenant format (outdated), false otherwise
-   */
-  isSingleTenant() {
-    return !this.tenantProfiles;
-  }
-  /**
-   * Generates account key from interface
-   * @param accountInterface
-   */
-  static generateAccountCacheKey(accountInterface) {
-    const homeTenantId = accountInterface.homeAccountId.split(".")[1];
-    const accountKey = [
-      accountInterface.homeAccountId,
-      accountInterface.environment || "",
-      homeTenantId || accountInterface.tenantId || ""
-    ];
-    return accountKey.join(Separators.CACHE_KEY_SEPARATOR).toLowerCase();
-  }
-  /**
-   * Build Account cache from IdToken, clientInfo and authority/policy. Associated with AAD.
-   * @param accountDetails
-   */
-  static createAccount(accountDetails, authority, base64Decode) {
-    const account = new _AccountEntity();
-    if (authority.authorityType === AuthorityType.Adfs) {
-      account.authorityType = CacheAccountType.ADFS_ACCOUNT_TYPE;
-    } else if (authority.protocolMode === ProtocolMode.OIDC) {
-      account.authorityType = CacheAccountType.GENERIC_ACCOUNT_TYPE;
-    } else {
-      account.authorityType = CacheAccountType.MSSTS_ACCOUNT_TYPE;
-    }
-    let clientInfo;
-    if (accountDetails.clientInfo && base64Decode) {
-      clientInfo = buildClientInfo(accountDetails.clientInfo, base64Decode);
-    }
-    account.clientInfo = accountDetails.clientInfo;
-    account.homeAccountId = accountDetails.homeAccountId;
-    account.nativeAccountId = accountDetails.nativeAccountId;
-    const env = accountDetails.environment || authority && authority.getPreferredCache();
-    if (!env) {
-      throw createClientAuthError(invalidCacheEnvironment);
-    }
-    account.environment = env;
-    account.realm = clientInfo?.utid || getTenantIdFromIdTokenClaims(accountDetails.idTokenClaims) || "";
-    account.localAccountId = clientInfo?.uid || accountDetails.idTokenClaims?.oid || accountDetails.idTokenClaims?.sub || "";
-    const preferredUsername = accountDetails.idTokenClaims?.preferred_username || accountDetails.idTokenClaims?.upn;
-    const email = accountDetails.idTokenClaims?.emails ? accountDetails.idTokenClaims.emails[0] : null;
-    account.username = preferredUsername || email || "";
-    account.name = accountDetails.idTokenClaims?.name || "";
-    account.cloudGraphHostName = accountDetails.cloudGraphHostName;
-    account.msGraphHost = accountDetails.msGraphHost;
-    if (accountDetails.tenantProfiles) {
-      account.tenantProfiles = accountDetails.tenantProfiles;
-    } else {
-      const tenantProfile = buildTenantProfile(accountDetails.homeAccountId, account.localAccountId, account.realm, accountDetails.idTokenClaims);
-      account.tenantProfiles = [tenantProfile];
-    }
-    return account;
-  }
-  /**
-   * Creates an AccountEntity object from AccountInfo
-   * @param accountInfo
-   * @param cloudGraphHostName
-   * @param msGraphHost
-   * @returns
-   */
-  static createFromAccountInfo(accountInfo, cloudGraphHostName, msGraphHost) {
-    const account = new _AccountEntity();
-    account.authorityType = accountInfo.authorityType || CacheAccountType.GENERIC_ACCOUNT_TYPE;
-    account.homeAccountId = accountInfo.homeAccountId;
-    account.localAccountId = accountInfo.localAccountId;
-    account.nativeAccountId = accountInfo.nativeAccountId;
-    account.realm = accountInfo.tenantId;
-    account.environment = accountInfo.environment;
-    account.username = accountInfo.username;
-    account.name = accountInfo.name;
-    account.cloudGraphHostName = cloudGraphHostName;
-    account.msGraphHost = msGraphHost;
-    account.tenantProfiles = Array.from(accountInfo.tenantProfiles?.values() || []);
-    return account;
-  }
-  /**
-   * Generate HomeAccountId from server response
-   * @param serverClientInfo
-   * @param authType
-   */
-  static generateHomeAccountId(serverClientInfo, authType, logger31, cryptoObj, idTokenClaims) {
-    if (!(authType === AuthorityType.Adfs || authType === AuthorityType.Dsts)) {
-      if (serverClientInfo) {
-        try {
-          const clientInfo = buildClientInfo(serverClientInfo, cryptoObj.base64Decode);
-          if (clientInfo.uid && clientInfo.utid) {
-            return `${clientInfo.uid}.${clientInfo.utid}`;
-          }
-        } catch (e) {
-        }
-      }
-      logger31.warning("No client info in response");
-    }
-    return idTokenClaims?.sub || "";
-  }
-  /**
-   * Validates an entity: checks for all expected params
-   * @param entity
-   */
-  static isAccountEntity(entity) {
-    if (!entity) {
-      return false;
-    }
-    return entity.hasOwnProperty("homeAccountId") && entity.hasOwnProperty("environment") && entity.hasOwnProperty("realm") && entity.hasOwnProperty("localAccountId") && entity.hasOwnProperty("username") && entity.hasOwnProperty("authorityType");
-  }
-  /**
-   * Helper function to determine whether 2 accountInfo objects represent the same account
-   * @param accountA
-   * @param accountB
-   * @param compareClaims - If set to true idTokenClaims will also be compared to determine account equality
-   */
-  static accountInfoIsEqual(accountA, accountB, compareClaims) {
-    if (!accountA || !accountB) {
-      return false;
-    }
-    let claimsMatch = true;
-    if (compareClaims) {
-      const accountAClaims = accountA.idTokenClaims || {};
-      const accountBClaims = accountB.idTokenClaims || {};
-      claimsMatch = accountAClaims.iat === accountBClaims.iat && accountAClaims.nonce === accountBClaims.nonce;
-    }
-    return accountA.homeAccountId === accountB.homeAccountId && accountA.localAccountId === accountB.localAccountId && accountA.username === accountB.username && accountA.tenantId === accountB.tenantId && accountA.environment === accountB.environment && accountA.nativeAccountId === accountB.nativeAccountId && claimsMatch;
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/UrlUtils.mjs
-var UrlUtils_exports = {};
-__export(UrlUtils_exports, {
-  getDeserializedResponse: () => getDeserializedResponse,
-  mapToQueryString: () => mapToQueryString,
-  stripLeadingHashOrQuery: () => stripLeadingHashOrQuery
-});
-function stripLeadingHashOrQuery(responseString) {
-  if (responseString.startsWith("#/")) {
-    return responseString.substring(2);
-  } else if (responseString.startsWith("#") || responseString.startsWith("?")) {
-    return responseString.substring(1);
-  }
-  return responseString;
-}
-function getDeserializedResponse(responseString) {
-  if (!responseString || responseString.indexOf("=") < 0) {
-    return null;
-  }
-  try {
-    const normalizedResponse = stripLeadingHashOrQuery(responseString);
-    const deserializedHash = Object.fromEntries(new URLSearchParams(normalizedResponse));
-    if (deserializedHash.code || deserializedHash.ear_jwe || deserializedHash.error || deserializedHash.error_description || deserializedHash.state) {
-      return deserializedHash;
-    }
-  } catch (e) {
-    throw createClientAuthError(hashNotDeserialized);
-  }
-  return null;
-}
-function mapToQueryString(parameters, encodeExtraParams = true, extraQueryParameters) {
-  const queryParameterArray = new Array();
-  parameters.forEach((value, key) => {
-    if (!encodeExtraParams && extraQueryParameters && key in extraQueryParameters) {
-      queryParameterArray.push(`${key}=${value}`);
-    } else {
-      queryParameterArray.push(`${key}=${encodeURIComponent(value)}`);
-    }
-  });
-  return queryParameterArray.join("&");
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/url/UrlString.mjs
-var UrlString = class _UrlString {
-  get urlString() {
-    return this._urlString;
-  }
-  constructor(url) {
-    this._urlString = url;
-    if (!this._urlString) {
-      throw createClientConfigurationError(urlEmptyError);
-    }
-    if (!url.includes("#")) {
-      this._urlString = _UrlString.canonicalizeUri(url);
-    }
-  }
-  /**
-   * Ensure urls are lower case and end with a / character.
-   * @param url
-   */
-  static canonicalizeUri(url) {
-    if (url) {
-      let lowerCaseUrl = url.toLowerCase();
-      if (StringUtils.endsWith(lowerCaseUrl, "?")) {
-        lowerCaseUrl = lowerCaseUrl.slice(0, -1);
-      } else if (StringUtils.endsWith(lowerCaseUrl, "?/")) {
-        lowerCaseUrl = lowerCaseUrl.slice(0, -2);
-      }
-      if (!StringUtils.endsWith(lowerCaseUrl, "/")) {
-        lowerCaseUrl += "/";
-      }
-      return lowerCaseUrl;
-    }
-    return url;
-  }
-  /**
-   * Throws if urlString passed is not a valid authority URI string.
-   */
-  validateAsUri() {
-    let components;
-    try {
-      components = this.getUrlComponents();
-    } catch (e) {
-      throw createClientConfigurationError(urlParseError);
-    }
-    if (!components.HostNameAndPort || !components.PathSegments) {
-      throw createClientConfigurationError(urlParseError);
-    }
-    if (!components.Protocol || components.Protocol.toLowerCase() !== "https:") {
-      throw createClientConfigurationError(authorityUriInsecure);
-    }
-  }
-  /**
-   * Given a url and a query string return the url with provided query string appended
-   * @param url
-   * @param queryString
-   */
-  static appendQueryString(url, queryString) {
-    if (!queryString) {
-      return url;
-    }
-    return url.indexOf("?") < 0 ? `${url}?${queryString}` : `${url}&${queryString}`;
-  }
-  /**
-   * Returns a url with the hash removed
-   * @param url
-   */
-  static removeHashFromUrl(url) {
-    return _UrlString.canonicalizeUri(url.split("#")[0]);
-  }
-  /**
-   * Given a url like https://a:b/common/d?e=f#g, and a tenantId, returns https://a:b/tenantId/d
-   * @param href The url
-   * @param tenantId The tenant id to replace
-   */
-  replaceTenantPath(tenantId) {
-    const urlObject = this.getUrlComponents();
-    const pathArray = urlObject.PathSegments;
-    if (tenantId && pathArray.length !== 0 && (pathArray[0] === AADAuthorityConstants.COMMON || pathArray[0] === AADAuthorityConstants.ORGANIZATIONS)) {
-      pathArray[0] = tenantId;
-    }
-    return _UrlString.constructAuthorityUriFromObject(urlObject);
-  }
-  /**
-   * Parses out the components from a url string.
-   * @returns An object with the various components. Please cache this value insted of calling this multiple times on the same url.
-   */
-  getUrlComponents() {
-    const regEx = RegExp("^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\\?([^#]*))?(#(.*))?");
-    const match = this.urlString.match(regEx);
-    if (!match) {
-      throw createClientConfigurationError(urlParseError);
-    }
-    const urlComponents = {
-      Protocol: match[1],
-      HostNameAndPort: match[4],
-      AbsolutePath: match[5],
-      QueryString: match[7]
-    };
-    let pathSegments = urlComponents.AbsolutePath.split("/");
-    pathSegments = pathSegments.filter((val) => val && val.length > 0);
-    urlComponents.PathSegments = pathSegments;
-    if (urlComponents.QueryString && urlComponents.QueryString.endsWith("/")) {
-      urlComponents.QueryString = urlComponents.QueryString.substring(0, urlComponents.QueryString.length - 1);
-    }
-    return urlComponents;
-  }
-  static getDomainFromUrl(url) {
-    const regEx = RegExp("^([^:/?#]+://)?([^/?#]*)");
-    const match = url.match(regEx);
-    if (!match) {
-      throw createClientConfigurationError(urlParseError);
-    }
-    return match[2];
-  }
-  static getAbsoluteUrl(relativeUrl, baseUrl) {
-    if (relativeUrl[0] === Constants.FORWARD_SLASH) {
-      const url = new _UrlString(baseUrl);
-      const baseComponents = url.getUrlComponents();
-      return baseComponents.Protocol + "//" + baseComponents.HostNameAndPort + relativeUrl;
-    }
-    return relativeUrl;
-  }
-  static constructAuthorityUriFromObject(urlObject) {
-    return new _UrlString(urlObject.Protocol + "//" + urlObject.HostNameAndPort + "/" + urlObject.PathSegments.join("/"));
-  }
-  /**
-   * Check if the hash of the URL string contains known properties
-   * @deprecated This API will be removed in a future version
-   */
-  static hashContainsKnownProperties(response) {
-    return !!getDeserializedResponse(response);
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityMetadata.mjs
-var rawMetdataJSON = {
-  endpointMetadata: {
-    "login.microsoftonline.com": {
-      token_endpoint: "https://login.microsoftonline.com/{tenantid}/oauth2/v2.0/token",
-      jwks_uri: "https://login.microsoftonline.com/{tenantid}/discovery/v2.0/keys",
-      issuer: "https://login.microsoftonline.com/{tenantid}/v2.0",
-      authorization_endpoint: "https://login.microsoftonline.com/{tenantid}/oauth2/v2.0/authorize",
-      end_session_endpoint: "https://login.microsoftonline.com/{tenantid}/oauth2/v2.0/logout"
-    },
-    "login.chinacloudapi.cn": {
-      token_endpoint: "https://login.chinacloudapi.cn/{tenantid}/oauth2/v2.0/token",
-      jwks_uri: "https://login.chinacloudapi.cn/{tenantid}/discovery/v2.0/keys",
-      issuer: "https://login.partner.microsoftonline.cn/{tenantid}/v2.0",
-      authorization_endpoint: "https://login.chinacloudapi.cn/{tenantid}/oauth2/v2.0/authorize",
-      end_session_endpoint: "https://login.chinacloudapi.cn/{tenantid}/oauth2/v2.0/logout"
-    },
-    "login.microsoftonline.us": {
-      token_endpoint: "https://login.microsoftonline.us/{tenantid}/oauth2/v2.0/token",
-      jwks_uri: "https://login.microsoftonline.us/{tenantid}/discovery/v2.0/keys",
-      issuer: "https://login.microsoftonline.us/{tenantid}/v2.0",
-      authorization_endpoint: "https://login.microsoftonline.us/{tenantid}/oauth2/v2.0/authorize",
-      end_session_endpoint: "https://login.microsoftonline.us/{tenantid}/oauth2/v2.0/logout"
-    }
-  },
-  instanceDiscoveryMetadata: {
-    tenant_discovery_endpoint: "https://{canonicalAuthority}/v2.0/.well-known/openid-configuration",
-    metadata: [
-      {
-        preferred_network: "login.microsoftonline.com",
-        preferred_cache: "login.windows.net",
-        aliases: [
-          "login.microsoftonline.com",
-          "login.windows.net",
-          "login.microsoft.com",
-          "sts.windows.net"
-        ]
-      },
-      {
-        preferred_network: "login.partner.microsoftonline.cn",
-        preferred_cache: "login.partner.microsoftonline.cn",
-        aliases: [
-          "login.partner.microsoftonline.cn",
-          "login.chinacloudapi.cn"
-        ]
-      },
-      {
-        preferred_network: "login.microsoftonline.de",
-        preferred_cache: "login.microsoftonline.de",
-        aliases: ["login.microsoftonline.de"]
-      },
-      {
-        preferred_network: "login.microsoftonline.us",
-        preferred_cache: "login.microsoftonline.us",
-        aliases: [
-          "login.microsoftonline.us",
-          "login.usgovcloudapi.net"
-        ]
-      },
-      {
-        preferred_network: "login-us.microsoftonline.com",
-        preferred_cache: "login-us.microsoftonline.com",
-        aliases: ["login-us.microsoftonline.com"]
-      }
-    ]
-  }
-};
-var EndpointMetadata = rawMetdataJSON.endpointMetadata;
-var InstanceDiscoveryMetadata = rawMetdataJSON.instanceDiscoveryMetadata;
-var InstanceDiscoveryMetadataAliases = /* @__PURE__ */ new Set();
-InstanceDiscoveryMetadata.metadata.forEach((metadataEntry) => {
-  metadataEntry.aliases.forEach((alias) => {
-    InstanceDiscoveryMetadataAliases.add(alias);
-  });
-});
-function getAliasesFromStaticSources(staticAuthorityOptions, logger31) {
-  let staticAliases;
-  const canonicalAuthority = staticAuthorityOptions.canonicalAuthority;
-  if (canonicalAuthority) {
-    const authorityHost = new UrlString(canonicalAuthority).getUrlComponents().HostNameAndPort;
-    staticAliases = getAliasesFromMetadata(authorityHost, staticAuthorityOptions.cloudDiscoveryMetadata?.metadata, AuthorityMetadataSource.CONFIG, logger31) || getAliasesFromMetadata(authorityHost, InstanceDiscoveryMetadata.metadata, AuthorityMetadataSource.HARDCODED_VALUES, logger31) || staticAuthorityOptions.knownAuthorities;
-  }
-  return staticAliases || [];
-}
-function getAliasesFromMetadata(authorityHost, cloudDiscoveryMetadata, source, logger31) {
-  logger31?.trace(`getAliasesFromMetadata called with source: ${source}`);
-  if (authorityHost && cloudDiscoveryMetadata) {
-    const metadata = getCloudDiscoveryMetadataFromNetworkResponse(cloudDiscoveryMetadata, authorityHost);
-    if (metadata) {
-      logger31?.trace(`getAliasesFromMetadata: found cloud discovery metadata in ${source}, returning aliases`);
-      return metadata.aliases;
-    } else {
-      logger31?.trace(`getAliasesFromMetadata: did not find cloud discovery metadata in ${source}`);
-    }
-  }
-  return null;
-}
-function getCloudDiscoveryMetadataFromHardcodedValues(authorityHost) {
-  const metadata = getCloudDiscoveryMetadataFromNetworkResponse(InstanceDiscoveryMetadata.metadata, authorityHost);
-  return metadata;
-}
-function getCloudDiscoveryMetadataFromNetworkResponse(response, authorityHost) {
-  for (let i = 0; i < response.length; i++) {
-    const metadata = response[i];
-    if (metadata.aliases.includes(authorityHost)) {
-      return metadata;
-    }
-  }
-  return null;
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/CacheErrorCodes.mjs
-var cacheQuotaExceededErrorCode = "cache_quota_exceeded";
-var cacheUnknownErrorCode = "cache_error_unknown";
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/CacheError.mjs
-var CacheErrorMessages = {
-  [cacheQuotaExceededErrorCode]: "Exceeded cache storage capacity.",
-  [cacheUnknownErrorCode]: "Unexpected error occurred when using cache storage."
-};
-var CacheError = class _CacheError extends Error {
-  constructor(errorCode, errorMessage) {
-    const message = errorMessage || (CacheErrorMessages[errorCode] ? CacheErrorMessages[errorCode] : CacheErrorMessages[cacheUnknownErrorCode]);
-    super(`${errorCode}: ${message}`);
-    Object.setPrototypeOf(this, _CacheError.prototype);
-    this.name = "CacheError";
-    this.errorCode = errorCode;
-    this.errorMessage = message;
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/CacheManager.mjs
-var CacheManager = class {
-  constructor(clientId, cryptoImpl, logger31, staticAuthorityOptions) {
-    this.clientId = clientId;
-    this.cryptoImpl = cryptoImpl;
-    this.commonLogger = logger31.clone(name, version);
-    this.staticAuthorityOptions = staticAuthorityOptions;
-  }
-  /**
-   * Returns all the accounts in the cache that match the optional filter. If no filter is provided, all accounts are returned.
-   * @param accountFilter - (Optional) filter to narrow down the accounts returned
-   * @returns Array of AccountInfo objects in cache
-   */
-  getAllAccounts(accountFilter) {
-    return this.buildTenantProfiles(this.getAccountsFilteredBy(accountFilter || {}), accountFilter);
-  }
-  /**
-   * Gets first tenanted AccountInfo object found based on provided filters
-   */
-  getAccountInfoFilteredBy(accountFilter) {
-    const allAccounts = this.getAllAccounts(accountFilter);
-    if (allAccounts.length > 1) {
-      const sortedAccounts = allAccounts.sort((account) => {
-        return account.idTokenClaims ? -1 : 1;
-      });
-      return sortedAccounts[0];
-    } else if (allAccounts.length === 1) {
-      return allAccounts[0];
-    } else {
-      return null;
-    }
-  }
-  /**
-   * Returns a single matching
-   * @param accountFilter
-   * @returns
-   */
-  getBaseAccountInfo(accountFilter) {
-    const accountEntities = this.getAccountsFilteredBy(accountFilter);
-    if (accountEntities.length > 0) {
-      return accountEntities[0].getAccountInfo();
-    } else {
-      return null;
-    }
-  }
-  /**
-   * Matches filtered account entities with cached ID tokens that match the tenant profile-specific account filters
-   * and builds the account info objects from the matching ID token's claims
-   * @param cachedAccounts
-   * @param accountFilter
-   * @returns Array of AccountInfo objects that match account and tenant profile filters
-   */
-  buildTenantProfiles(cachedAccounts, accountFilter) {
-    return cachedAccounts.flatMap((accountEntity) => {
-      return this.getTenantProfilesFromAccountEntity(accountEntity, accountFilter?.tenantId, accountFilter);
-    });
-  }
-  getTenantedAccountInfoByFilter(accountInfo, tokenKeys, tenantProfile, tenantProfileFilter) {
-    let tenantedAccountInfo = null;
-    let idTokenClaims;
-    if (tenantProfileFilter) {
-      if (!this.tenantProfileMatchesFilter(tenantProfile, tenantProfileFilter)) {
-        return null;
-      }
-    }
-    const idToken = this.getIdToken(accountInfo, tokenKeys, tenantProfile.tenantId);
-    if (idToken) {
-      idTokenClaims = extractTokenClaims(idToken.secret, this.cryptoImpl.base64Decode);
-      if (!this.idTokenClaimsMatchTenantProfileFilter(idTokenClaims, tenantProfileFilter)) {
-        return null;
-      }
-    }
-    tenantedAccountInfo = updateAccountTenantProfileData(accountInfo, tenantProfile, idTokenClaims, idToken?.secret);
-    return tenantedAccountInfo;
-  }
-  getTenantProfilesFromAccountEntity(accountEntity, targetTenantId, tenantProfileFilter) {
-    const accountInfo = accountEntity.getAccountInfo();
-    let searchTenantProfiles = accountInfo.tenantProfiles || /* @__PURE__ */ new Map();
-    const tokenKeys = this.getTokenKeys();
-    if (targetTenantId) {
-      const tenantProfile = searchTenantProfiles.get(targetTenantId);
-      if (tenantProfile) {
-        searchTenantProfiles = /* @__PURE__ */ new Map([
-          [targetTenantId, tenantProfile]
-        ]);
-      } else {
-        return [];
-      }
-    }
-    const matchingTenantProfiles = [];
-    searchTenantProfiles.forEach((tenantProfile) => {
-      const tenantedAccountInfo = this.getTenantedAccountInfoByFilter(accountInfo, tokenKeys, tenantProfile, tenantProfileFilter);
-      if (tenantedAccountInfo) {
-        matchingTenantProfiles.push(tenantedAccountInfo);
-      }
-    });
-    return matchingTenantProfiles;
-  }
-  tenantProfileMatchesFilter(tenantProfile, tenantProfileFilter) {
-    if (!!tenantProfileFilter.localAccountId && !this.matchLocalAccountIdFromTenantProfile(tenantProfile, tenantProfileFilter.localAccountId)) {
-      return false;
-    }
-    if (!!tenantProfileFilter.name && !(tenantProfile.name === tenantProfileFilter.name)) {
-      return false;
-    }
-    if (tenantProfileFilter.isHomeTenant !== void 0 && !(tenantProfile.isHomeTenant === tenantProfileFilter.isHomeTenant)) {
-      return false;
-    }
-    return true;
-  }
-  idTokenClaimsMatchTenantProfileFilter(idTokenClaims, tenantProfileFilter) {
-    if (tenantProfileFilter) {
-      if (!!tenantProfileFilter.localAccountId && !this.matchLocalAccountIdFromTokenClaims(idTokenClaims, tenantProfileFilter.localAccountId)) {
-        return false;
-      }
-      if (!!tenantProfileFilter.loginHint && !this.matchLoginHintFromTokenClaims(idTokenClaims, tenantProfileFilter.loginHint)) {
-        return false;
-      }
-      if (!!tenantProfileFilter.username && !this.matchUsername(idTokenClaims.preferred_username, tenantProfileFilter.username)) {
-        return false;
-      }
-      if (!!tenantProfileFilter.name && !this.matchName(idTokenClaims, tenantProfileFilter.name)) {
-        return false;
-      }
-      if (!!tenantProfileFilter.sid && !this.matchSid(idTokenClaims, tenantProfileFilter.sid)) {
-        return false;
-      }
-    }
-    return true;
-  }
-  /**
-   * saves a cache record
-   * @param cacheRecord {CacheRecord}
-   * @param storeInCache {?StoreInCache}
-   * @param correlationId {?string} correlation id
-   */
-  async saveCacheRecord(cacheRecord, correlationId, storeInCache) {
-    if (!cacheRecord) {
-      throw createClientAuthError(invalidCacheRecord);
-    }
-    try {
-      if (!!cacheRecord.account) {
-        await this.setAccount(cacheRecord.account, correlationId);
-      }
-      if (!!cacheRecord.idToken && storeInCache?.idToken !== false) {
-        await this.setIdTokenCredential(cacheRecord.idToken, correlationId);
-      }
-      if (!!cacheRecord.accessToken && storeInCache?.accessToken !== false) {
-        await this.saveAccessToken(cacheRecord.accessToken, correlationId);
-      }
-      if (!!cacheRecord.refreshToken && storeInCache?.refreshToken !== false) {
-        await this.setRefreshTokenCredential(cacheRecord.refreshToken, correlationId);
-      }
-      if (!!cacheRecord.appMetadata) {
-        this.setAppMetadata(cacheRecord.appMetadata);
-      }
-    } catch (e) {
-      this.commonLogger?.error(`CacheManager.saveCacheRecord: failed`);
-      if (e instanceof Error) {
-        this.commonLogger?.errorPii(`CacheManager.saveCacheRecord: ${e.message}`, correlationId);
-        if (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.message.includes("exceeded the quota")) {
-          this.commonLogger?.error(`CacheManager.saveCacheRecord: exceeded storage quota`, correlationId);
-          throw new CacheError(cacheQuotaExceededErrorCode);
-        } else {
-          throw new CacheError(e.name, e.message);
-        }
-      } else {
-        this.commonLogger?.errorPii(`CacheManager.saveCacheRecord: ${e}`, correlationId);
-        throw new CacheError(cacheUnknownErrorCode);
-      }
-    }
-  }
-  /**
-   * saves access token credential
-   * @param credential
-   */
-  async saveAccessToken(credential, correlationId) {
-    const accessTokenFilter = {
-      clientId: credential.clientId,
-      credentialType: credential.credentialType,
-      environment: credential.environment,
-      homeAccountId: credential.homeAccountId,
-      realm: credential.realm,
-      tokenType: credential.tokenType,
-      requestedClaimsHash: credential.requestedClaimsHash
-    };
-    const tokenKeys = this.getTokenKeys();
-    const currentScopes = ScopeSet.fromString(credential.target);
-    const removedAccessTokens = [];
-    tokenKeys.accessToken.forEach((key) => {
-      if (!this.accessTokenKeyMatchesFilter(key, accessTokenFilter, false)) {
-        return;
-      }
-      const tokenEntity = this.getAccessTokenCredential(key);
-      if (tokenEntity && this.credentialMatchesFilter(tokenEntity, accessTokenFilter)) {
-        const tokenScopeSet = ScopeSet.fromString(tokenEntity.target);
-        if (tokenScopeSet.intersectingScopeSets(currentScopes)) {
-          removedAccessTokens.push(this.removeAccessToken(key));
-        }
-      }
-    });
-    await Promise.all(removedAccessTokens);
-    await this.setAccessTokenCredential(credential, correlationId);
-  }
-  /**
-   * Retrieve account entities matching all provided tenant-agnostic filters; if no filter is set, get all account entities in the cache
-   * Not checking for casing as keys are all generated in lower case, remember to convert to lower case if object properties are compared
-   * @param accountFilter - An object containing Account properties to filter by
-   */
-  getAccountsFilteredBy(accountFilter) {
-    const allAccountKeys = this.getAccountKeys();
-    const matchingAccounts = [];
-    allAccountKeys.forEach((cacheKey) => {
-      if (!this.isAccountKey(cacheKey, accountFilter.homeAccountId)) {
-        return;
-      }
-      const entity = this.getAccount(cacheKey, this.commonLogger);
-      if (!entity) {
-        return;
-      }
-      if (!!accountFilter.homeAccountId && !this.matchHomeAccountId(entity, accountFilter.homeAccountId)) {
-        return;
-      }
-      if (!!accountFilter.username && !this.matchUsername(entity.username, accountFilter.username)) {
-        return;
-      }
-      if (!!accountFilter.environment && !this.matchEnvironment(entity, accountFilter.environment)) {
-        return;
-      }
-      if (!!accountFilter.realm && !this.matchRealm(entity, accountFilter.realm)) {
-        return;
-      }
-      if (!!accountFilter.nativeAccountId && !this.matchNativeAccountId(entity, accountFilter.nativeAccountId)) {
-        return;
-      }
-      if (!!accountFilter.authorityType && !this.matchAuthorityType(entity, accountFilter.authorityType)) {
-        return;
-      }
-      const tenantProfileFilter = {
-        localAccountId: accountFilter?.localAccountId,
-        name: accountFilter?.name
-      };
-      const matchingTenantProfiles = entity.tenantProfiles?.filter((tenantProfile) => {
-        return this.tenantProfileMatchesFilter(tenantProfile, tenantProfileFilter);
-      });
-      if (matchingTenantProfiles && matchingTenantProfiles.length === 0) {
-        return;
-      }
-      matchingAccounts.push(entity);
-    });
-    return matchingAccounts;
-  }
-  /**
-   * Returns true if the given key matches our account key schema. Also matches homeAccountId and/or tenantId if provided
-   * @param key
-   * @param homeAccountId
-   * @param tenantId
-   * @returns
-   */
-  isAccountKey(key, homeAccountId, tenantId) {
-    if (key.split(Separators.CACHE_KEY_SEPARATOR).length < 3) {
-      return false;
-    }
-    if (homeAccountId && !key.toLowerCase().includes(homeAccountId.toLowerCase())) {
-      return false;
-    }
-    if (tenantId && !key.toLowerCase().includes(tenantId.toLowerCase())) {
-      return false;
-    }
-    return true;
-  }
-  /**
-   * Returns true if the given key matches our credential key schema.
-   * @param key
-   */
-  isCredentialKey(key) {
-    if (key.split(Separators.CACHE_KEY_SEPARATOR).length < 6) {
-      return false;
-    }
-    const lowerCaseKey = key.toLowerCase();
-    if (lowerCaseKey.indexOf(CredentialType.ID_TOKEN.toLowerCase()) === -1 && lowerCaseKey.indexOf(CredentialType.ACCESS_TOKEN.toLowerCase()) === -1 && lowerCaseKey.indexOf(CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME.toLowerCase()) === -1 && lowerCaseKey.indexOf(CredentialType.REFRESH_TOKEN.toLowerCase()) === -1) {
-      return false;
-    }
-    if (lowerCaseKey.indexOf(CredentialType.REFRESH_TOKEN.toLowerCase()) > -1) {
-      const clientIdValidation = `${CredentialType.REFRESH_TOKEN}${Separators.CACHE_KEY_SEPARATOR}${this.clientId}${Separators.CACHE_KEY_SEPARATOR}`;
-      const familyIdValidation = `${CredentialType.REFRESH_TOKEN}${Separators.CACHE_KEY_SEPARATOR}${THE_FAMILY_ID}${Separators.CACHE_KEY_SEPARATOR}`;
-      if (lowerCaseKey.indexOf(clientIdValidation.toLowerCase()) === -1 && lowerCaseKey.indexOf(familyIdValidation.toLowerCase()) === -1) {
-        return false;
-      }
-    } else if (lowerCaseKey.indexOf(this.clientId.toLowerCase()) === -1) {
-      return false;
-    }
-    return true;
-  }
-  /**
-   * Returns whether or not the given credential entity matches the filter
-   * @param entity
-   * @param filter
-   * @returns
-   */
-  credentialMatchesFilter(entity, filter) {
-    if (!!filter.clientId && !this.matchClientId(entity, filter.clientId)) {
-      return false;
-    }
-    if (!!filter.userAssertionHash && !this.matchUserAssertionHash(entity, filter.userAssertionHash)) {
-      return false;
-    }
-    if (typeof filter.homeAccountId === "string" && !this.matchHomeAccountId(entity, filter.homeAccountId)) {
-      return false;
-    }
-    if (!!filter.environment && !this.matchEnvironment(entity, filter.environment)) {
-      return false;
-    }
-    if (!!filter.realm && !this.matchRealm(entity, filter.realm)) {
-      return false;
-    }
-    if (!!filter.credentialType && !this.matchCredentialType(entity, filter.credentialType)) {
-      return false;
-    }
-    if (!!filter.familyId && !this.matchFamilyId(entity, filter.familyId)) {
-      return false;
-    }
-    if (!!filter.target && !this.matchTarget(entity, filter.target)) {
-      return false;
-    }
-    if (filter.requestedClaimsHash || entity.requestedClaimsHash) {
-      if (entity.requestedClaimsHash !== filter.requestedClaimsHash) {
-        return false;
-      }
-    }
-    if (entity.credentialType === CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME) {
-      if (!!filter.tokenType && !this.matchTokenType(entity, filter.tokenType)) {
-        return false;
-      }
-      if (filter.tokenType === AuthenticationScheme.SSH) {
-        if (filter.keyId && !this.matchKeyId(entity, filter.keyId)) {
-          return false;
-        }
-      }
-    }
-    return true;
-  }
-  /**
-   * retrieve appMetadata matching all provided filters; if no filter is set, get all appMetadata
-   * @param filter
-   */
-  getAppMetadataFilteredBy(filter) {
-    const allCacheKeys = this.getKeys();
-    const matchingAppMetadata = {};
-    allCacheKeys.forEach((cacheKey) => {
-      if (!this.isAppMetadata(cacheKey)) {
-        return;
-      }
-      const entity = this.getAppMetadata(cacheKey);
-      if (!entity) {
-        return;
-      }
-      if (!!filter.environment && !this.matchEnvironment(entity, filter.environment)) {
-        return;
-      }
-      if (!!filter.clientId && !this.matchClientId(entity, filter.clientId)) {
-        return;
-      }
-      matchingAppMetadata[cacheKey] = entity;
-    });
-    return matchingAppMetadata;
-  }
-  /**
-   * retrieve authorityMetadata that contains a matching alias
-   * @param filter
-   */
-  getAuthorityMetadataByAlias(host) {
-    const allCacheKeys = this.getAuthorityMetadataKeys();
-    let matchedEntity = null;
-    allCacheKeys.forEach((cacheKey) => {
-      if (!this.isAuthorityMetadata(cacheKey) || cacheKey.indexOf(this.clientId) === -1) {
-        return;
-      }
-      const entity = this.getAuthorityMetadata(cacheKey);
-      if (!entity) {
-        return;
-      }
-      if (entity.aliases.indexOf(host) === -1) {
-        return;
-      }
-      matchedEntity = entity;
-    });
-    return matchedEntity;
-  }
-  /**
-   * Removes all accounts and related tokens from cache.
-   */
-  async removeAllAccounts() {
-    const allAccountKeys = this.getAccountKeys();
-    const removedAccounts = [];
-    allAccountKeys.forEach((cacheKey) => {
-      removedAccounts.push(this.removeAccount(cacheKey));
-    });
-    await Promise.all(removedAccounts);
-  }
-  /**
-   * Removes the account and related tokens for a given account key
-   * @param account
-   */
-  async removeAccount(accountKey) {
-    const account = this.getAccount(accountKey, this.commonLogger);
-    if (!account) {
-      return;
-    }
-    await this.removeAccountContext(account);
-    this.removeItem(accountKey);
-  }
-  /**
-   * Removes credentials associated with the provided account
-   * @param account
-   */
-  async removeAccountContext(account) {
-    const allTokenKeys = this.getTokenKeys();
-    const accountId = account.generateAccountId();
-    const removedCredentials = [];
-    allTokenKeys.idToken.forEach((key) => {
-      if (key.indexOf(accountId) === 0) {
-        this.removeIdToken(key);
-      }
-    });
-    allTokenKeys.accessToken.forEach((key) => {
-      if (key.indexOf(accountId) === 0) {
-        removedCredentials.push(this.removeAccessToken(key));
-      }
-    });
-    allTokenKeys.refreshToken.forEach((key) => {
-      if (key.indexOf(accountId) === 0) {
-        this.removeRefreshToken(key);
-      }
-    });
-    await Promise.all(removedCredentials);
-  }
-  /**
-   * returns a boolean if the given credential is removed
-   * @param credential
-   */
-  async removeAccessToken(key) {
-    const credential = this.getAccessTokenCredential(key);
-    if (!credential) {
-      return;
-    }
-    if (credential.credentialType.toLowerCase() === CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME.toLowerCase()) {
-      if (credential.tokenType === AuthenticationScheme.POP) {
-        const accessTokenWithAuthSchemeEntity = credential;
-        const kid = accessTokenWithAuthSchemeEntity.keyId;
-        if (kid) {
-          try {
-            await this.cryptoImpl.removeTokenBindingKey(kid);
-          } catch (error2) {
-            throw createClientAuthError(bindingKeyNotRemoved);
-          }
-        }
-      }
-    }
-    return this.removeItem(key);
-  }
-  /**
-   * Removes all app metadata objects from cache.
-   */
-  removeAppMetadata() {
-    const allCacheKeys = this.getKeys();
-    allCacheKeys.forEach((cacheKey) => {
-      if (this.isAppMetadata(cacheKey)) {
-        this.removeItem(cacheKey);
-      }
-    });
-    return true;
-  }
-  /**
-   * Retrieve AccountEntity from cache
-   * @param account
-   */
-  readAccountFromCache(account) {
-    const accountKey = AccountEntity.generateAccountCacheKey(account);
-    return this.getAccount(accountKey, this.commonLogger);
-  }
-  /**
-   * Retrieve IdTokenEntity from cache
-   * @param account {AccountInfo}
-   * @param tokenKeys {?TokenKeys}
-   * @param targetRealm {?string}
-   * @param performanceClient {?IPerformanceClient}
-   * @param correlationId {?string}
-   */
-  getIdToken(account, tokenKeys, targetRealm, performanceClient, correlationId) {
-    this.commonLogger.trace("CacheManager - getIdToken called");
-    const idTokenFilter = {
-      homeAccountId: account.homeAccountId,
-      environment: account.environment,
-      credentialType: CredentialType.ID_TOKEN,
-      clientId: this.clientId,
-      realm: targetRealm
-    };
-    const idTokenMap = this.getIdTokensByFilter(idTokenFilter, tokenKeys);
-    const numIdTokens = idTokenMap.size;
-    if (numIdTokens < 1) {
-      this.commonLogger.info("CacheManager:getIdToken - No token found");
-      return null;
-    } else if (numIdTokens > 1) {
-      let tokensToBeRemoved = idTokenMap;
-      if (!targetRealm) {
-        const homeIdTokenMap = /* @__PURE__ */ new Map();
-        idTokenMap.forEach((idToken, key) => {
-          if (idToken.realm === account.tenantId) {
-            homeIdTokenMap.set(key, idToken);
-          }
-        });
-        const numHomeIdTokens = homeIdTokenMap.size;
-        if (numHomeIdTokens < 1) {
-          this.commonLogger.info("CacheManager:getIdToken - Multiple ID tokens found for account but none match account entity tenant id, returning first result");
-          return idTokenMap.values().next().value;
-        } else if (numHomeIdTokens === 1) {
-          this.commonLogger.info("CacheManager:getIdToken - Multiple ID tokens found for account, defaulting to home tenant profile");
-          return homeIdTokenMap.values().next().value;
-        } else {
-          tokensToBeRemoved = homeIdTokenMap;
-        }
-      }
-      this.commonLogger.info("CacheManager:getIdToken - Multiple matching ID tokens found, clearing them");
-      tokensToBeRemoved.forEach((idToken, key) => {
-        this.removeIdToken(key);
-      });
-      if (performanceClient && correlationId) {
-        performanceClient.addFields({ multiMatchedID: idTokenMap.size }, correlationId);
-      }
-      return null;
-    }
-    this.commonLogger.info("CacheManager:getIdToken - Returning ID token");
-    return idTokenMap.values().next().value;
-  }
-  /**
-   * Gets all idTokens matching the given filter
-   * @param filter
-   * @returns
-   */
-  getIdTokensByFilter(filter, tokenKeys) {
-    const idTokenKeys = tokenKeys && tokenKeys.idToken || this.getTokenKeys().idToken;
-    const idTokens = /* @__PURE__ */ new Map();
-    idTokenKeys.forEach((key) => {
-      if (!this.idTokenKeyMatchesFilter(key, {
-        clientId: this.clientId,
-        ...filter
-      })) {
-        return;
-      }
-      const idToken = this.getIdTokenCredential(key);
-      if (idToken && this.credentialMatchesFilter(idToken, filter)) {
-        idTokens.set(key, idToken);
-      }
-    });
-    return idTokens;
-  }
-  /**
-   * Validate the cache key against filter before retrieving and parsing cache value
-   * @param key
-   * @param filter
-   * @returns
-   */
-  idTokenKeyMatchesFilter(inputKey, filter) {
-    const key = inputKey.toLowerCase();
-    if (filter.clientId && key.indexOf(filter.clientId.toLowerCase()) === -1) {
-      return false;
-    }
-    if (filter.homeAccountId && key.indexOf(filter.homeAccountId.toLowerCase()) === -1) {
-      return false;
-    }
-    return true;
-  }
-  /**
-   * Removes idToken from the cache
-   * @param key
-   */
-  removeIdToken(key) {
-    this.removeItem(key);
-  }
-  /**
-   * Removes refresh token from the cache
-   * @param key
-   */
-  removeRefreshToken(key) {
-    this.removeItem(key);
-  }
-  /**
-   * Retrieve AccessTokenEntity from cache
-   * @param account {AccountInfo}
-   * @param request {BaseAuthRequest}
-   * @param tokenKeys {?TokenKeys}
-   * @param performanceClient {?IPerformanceClient}
-   * @param correlationId {?string}
-   */
-  getAccessToken(account, request5, tokenKeys, targetRealm, performanceClient, correlationId) {
-    this.commonLogger.trace("CacheManager - getAccessToken called");
-    const scopes = ScopeSet.createSearchScopes(request5.scopes);
-    const authScheme = request5.authenticationScheme || AuthenticationScheme.BEARER;
-    const credentialType = authScheme && authScheme.toLowerCase() !== AuthenticationScheme.BEARER.toLowerCase() ? CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME : CredentialType.ACCESS_TOKEN;
-    const accessTokenFilter = {
-      homeAccountId: account.homeAccountId,
-      environment: account.environment,
-      credentialType,
-      clientId: this.clientId,
-      realm: targetRealm || account.tenantId,
-      target: scopes,
-      tokenType: authScheme,
-      keyId: request5.sshKid,
-      requestedClaimsHash: request5.requestedClaimsHash
-    };
-    const accessTokenKeys = tokenKeys && tokenKeys.accessToken || this.getTokenKeys().accessToken;
-    const accessTokens = [];
-    accessTokenKeys.forEach((key) => {
-      if (this.accessTokenKeyMatchesFilter(key, accessTokenFilter, true)) {
-        const accessToken = this.getAccessTokenCredential(key);
-        if (accessToken && this.credentialMatchesFilter(accessToken, accessTokenFilter)) {
-          accessTokens.push(accessToken);
-        }
-      }
-    });
-    const numAccessTokens = accessTokens.length;
-    if (numAccessTokens < 1) {
-      this.commonLogger.info("CacheManager:getAccessToken - No token found");
-      return null;
-    } else if (numAccessTokens > 1) {
-      this.commonLogger.info("CacheManager:getAccessToken - Multiple access tokens found, clearing them");
-      accessTokens.forEach((accessToken) => {
-        void this.removeAccessToken(generateCredentialKey(accessToken));
-      });
-      if (performanceClient && correlationId) {
-        performanceClient.addFields({ multiMatchedAT: accessTokens.length }, correlationId);
-      }
-      return null;
-    }
-    this.commonLogger.info("CacheManager:getAccessToken - Returning access token");
-    return accessTokens[0];
-  }
-  /**
-   * Validate the cache key against filter before retrieving and parsing cache value
-   * @param key
-   * @param filter
-   * @param keyMustContainAllScopes
-   * @returns
-   */
-  accessTokenKeyMatchesFilter(inputKey, filter, keyMustContainAllScopes) {
-    const key = inputKey.toLowerCase();
-    if (filter.clientId && key.indexOf(filter.clientId.toLowerCase()) === -1) {
-      return false;
-    }
-    if (filter.homeAccountId && key.indexOf(filter.homeAccountId.toLowerCase()) === -1) {
-      return false;
-    }
-    if (filter.realm && key.indexOf(filter.realm.toLowerCase()) === -1) {
-      return false;
-    }
-    if (filter.requestedClaimsHash && key.indexOf(filter.requestedClaimsHash.toLowerCase()) === -1) {
-      return false;
-    }
-    if (filter.target) {
-      const scopes = filter.target.asArray();
-      for (let i = 0; i < scopes.length; i++) {
-        if (keyMustContainAllScopes && !key.includes(scopes[i].toLowerCase())) {
-          return false;
-        } else if (!keyMustContainAllScopes && key.includes(scopes[i].toLowerCase())) {
-          return true;
-        }
-      }
-    }
-    return true;
-  }
-  /**
-   * Gets all access tokens matching the filter
-   * @param filter
-   * @returns
-   */
-  getAccessTokensByFilter(filter) {
-    const tokenKeys = this.getTokenKeys();
-    const accessTokens = [];
-    tokenKeys.accessToken.forEach((key) => {
-      if (!this.accessTokenKeyMatchesFilter(key, filter, true)) {
-        return;
-      }
-      const accessToken = this.getAccessTokenCredential(key);
-      if (accessToken && this.credentialMatchesFilter(accessToken, filter)) {
-        accessTokens.push(accessToken);
-      }
-    });
-    return accessTokens;
-  }
-  /**
-   * Helper to retrieve the appropriate refresh token from cache
-   * @param account {AccountInfo}
-   * @param familyRT {boolean}
-   * @param tokenKeys {?TokenKeys}
-   * @param performanceClient {?IPerformanceClient}
-   * @param correlationId {?string}
-   */
-  getRefreshToken(account, familyRT, tokenKeys, performanceClient, correlationId) {
-    this.commonLogger.trace("CacheManager - getRefreshToken called");
-    const id = familyRT ? THE_FAMILY_ID : void 0;
-    const refreshTokenFilter = {
-      homeAccountId: account.homeAccountId,
-      environment: account.environment,
-      credentialType: CredentialType.REFRESH_TOKEN,
-      clientId: this.clientId,
-      familyId: id
-    };
-    const refreshTokenKeys = tokenKeys && tokenKeys.refreshToken || this.getTokenKeys().refreshToken;
-    const refreshTokens = [];
-    refreshTokenKeys.forEach((key) => {
-      if (this.refreshTokenKeyMatchesFilter(key, refreshTokenFilter)) {
-        const refreshToken = this.getRefreshTokenCredential(key);
-        if (refreshToken && this.credentialMatchesFilter(refreshToken, refreshTokenFilter)) {
-          refreshTokens.push(refreshToken);
-        }
-      }
-    });
-    const numRefreshTokens = refreshTokens.length;
-    if (numRefreshTokens < 1) {
-      this.commonLogger.info("CacheManager:getRefreshToken - No refresh token found.");
-      return null;
-    }
-    if (numRefreshTokens > 1 && performanceClient && correlationId) {
-      performanceClient.addFields({ multiMatchedRT: numRefreshTokens }, correlationId);
-    }
-    this.commonLogger.info("CacheManager:getRefreshToken - returning refresh token");
-    return refreshTokens[0];
-  }
-  /**
-   * Validate the cache key against filter before retrieving and parsing cache value
-   * @param key
-   * @param filter
-   */
-  refreshTokenKeyMatchesFilter(inputKey, filter) {
-    const key = inputKey.toLowerCase();
-    if (filter.familyId && key.indexOf(filter.familyId.toLowerCase()) === -1) {
-      return false;
-    }
-    if (!filter.familyId && filter.clientId && key.indexOf(filter.clientId.toLowerCase()) === -1) {
-      return false;
-    }
-    if (filter.homeAccountId && key.indexOf(filter.homeAccountId.toLowerCase()) === -1) {
-      return false;
-    }
-    return true;
-  }
-  /**
-   * Retrieve AppMetadataEntity from cache
-   */
-  readAppMetadataFromCache(environment) {
-    const appMetadataFilter = {
-      environment,
-      clientId: this.clientId
-    };
-    const appMetadata = this.getAppMetadataFilteredBy(appMetadataFilter);
-    const appMetadataEntries = Object.keys(appMetadata).map((key) => appMetadata[key]);
-    const numAppMetadata = appMetadataEntries.length;
-    if (numAppMetadata < 1) {
-      return null;
-    } else if (numAppMetadata > 1) {
-      throw createClientAuthError(multipleMatchingAppMetadata);
-    }
-    return appMetadataEntries[0];
-  }
-  /**
-   * Return the family_id value associated  with FOCI
-   * @param environment
-   * @param clientId
-   */
-  isAppMetadataFOCI(environment) {
-    const appMetadata = this.readAppMetadataFromCache(environment);
-    return !!(appMetadata && appMetadata.familyId === THE_FAMILY_ID);
-  }
-  /**
-   * helper to match account ids
-   * @param value
-   * @param homeAccountId
-   */
-  matchHomeAccountId(entity, homeAccountId) {
-    return !!(typeof entity.homeAccountId === "string" && homeAccountId === entity.homeAccountId);
-  }
-  /**
-   * helper to match account ids
-   * @param entity
-   * @param localAccountId
-   * @returns
-   */
-  matchLocalAccountIdFromTokenClaims(tokenClaims, localAccountId) {
-    const idTokenLocalAccountId = tokenClaims.oid || tokenClaims.sub;
-    return localAccountId === idTokenLocalAccountId;
-  }
-  matchLocalAccountIdFromTenantProfile(tenantProfile, localAccountId) {
-    return tenantProfile.localAccountId === localAccountId;
-  }
-  /**
-   * helper to match names
-   * @param entity
-   * @param name
-   * @returns true if the downcased name properties are present and match in the filter and the entity
-   */
-  matchName(claims, name3) {
-    return !!(name3.toLowerCase() === claims.name?.toLowerCase());
-  }
-  /**
-   * helper to match usernames
-   * @param entity
-   * @param username
-   * @returns
-   */
-  matchUsername(cachedUsername, filterUsername) {
-    return !!(cachedUsername && typeof cachedUsername === "string" && filterUsername?.toLowerCase() === cachedUsername.toLowerCase());
-  }
-  /**
-   * helper to match assertion
-   * @param value
-   * @param oboAssertion
-   */
-  matchUserAssertionHash(entity, userAssertionHash) {
-    return !!(entity.userAssertionHash && userAssertionHash === entity.userAssertionHash);
-  }
-  /**
-   * helper to match environment
-   * @param value
-   * @param environment
-   */
-  matchEnvironment(entity, environment) {
-    if (this.staticAuthorityOptions) {
-      const staticAliases = getAliasesFromStaticSources(this.staticAuthorityOptions, this.commonLogger);
-      if (staticAliases.includes(environment) && staticAliases.includes(entity.environment)) {
-        return true;
-      }
-    }
-    const cloudMetadata = this.getAuthorityMetadataByAlias(environment);
-    if (cloudMetadata && cloudMetadata.aliases.indexOf(entity.environment) > -1) {
-      return true;
-    }
-    return false;
-  }
-  /**
-   * helper to match credential type
-   * @param entity
-   * @param credentialType
-   */
-  matchCredentialType(entity, credentialType) {
-    return entity.credentialType && credentialType.toLowerCase() === entity.credentialType.toLowerCase();
-  }
-  /**
-   * helper to match client ids
-   * @param entity
-   * @param clientId
-   */
-  matchClientId(entity, clientId) {
-    return !!(entity.clientId && clientId === entity.clientId);
-  }
-  /**
-   * helper to match family ids
-   * @param entity
-   * @param familyId
-   */
-  matchFamilyId(entity, familyId) {
-    return !!(entity.familyId && familyId === entity.familyId);
-  }
-  /**
-   * helper to match realm
-   * @param entity
-   * @param realm
-   */
-  matchRealm(entity, realm) {
-    return !!(entity.realm?.toLowerCase() === realm.toLowerCase());
-  }
-  /**
-   * helper to match nativeAccountId
-   * @param entity
-   * @param nativeAccountId
-   * @returns boolean indicating the match result
-   */
-  matchNativeAccountId(entity, nativeAccountId) {
-    return !!(entity.nativeAccountId && nativeAccountId === entity.nativeAccountId);
-  }
-  /**
-   * helper to match loginHint which can be either:
-   * 1. login_hint ID token claim
-   * 2. username in cached account object
-   * 3. upn in ID token claims
-   * @param entity
-   * @param loginHint
-   * @returns
-   */
-  matchLoginHintFromTokenClaims(tokenClaims, loginHint) {
-    if (tokenClaims.login_hint === loginHint) {
-      return true;
-    }
-    if (tokenClaims.preferred_username === loginHint) {
-      return true;
-    }
-    if (tokenClaims.upn === loginHint) {
-      return true;
-    }
-    return false;
-  }
-  /**
-   * Helper to match sid
-   * @param entity
-   * @param sid
-   * @returns true if the sid claim is present and matches the filter
-   */
-  matchSid(idTokenClaims, sid) {
-    return idTokenClaims.sid === sid;
-  }
-  matchAuthorityType(entity, authorityType) {
-    return !!(entity.authorityType && authorityType.toLowerCase() === entity.authorityType.toLowerCase());
-  }
-  /**
-   * Returns true if the target scopes are a subset of the current entity's scopes, false otherwise.
-   * @param entity
-   * @param target
-   */
-  matchTarget(entity, target) {
-    const isNotAccessTokenCredential = entity.credentialType !== CredentialType.ACCESS_TOKEN && entity.credentialType !== CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME;
-    if (isNotAccessTokenCredential || !entity.target) {
-      return false;
-    }
-    const entityScopeSet = ScopeSet.fromString(entity.target);
-    return entityScopeSet.containsScopeSet(target);
-  }
-  /**
-   * Returns true if the credential's tokenType or Authentication Scheme matches the one in the request, false otherwise
-   * @param entity
-   * @param tokenType
-   */
-  matchTokenType(entity, tokenType) {
-    return !!(entity.tokenType && entity.tokenType === tokenType);
-  }
-  /**
-   * Returns true if the credential's keyId matches the one in the request, false otherwise
-   * @param entity
-   * @param keyId
-   */
-  matchKeyId(entity, keyId) {
-    return !!(entity.keyId && entity.keyId === keyId);
-  }
-  /**
-   * returns if a given cache entity is of the type appmetadata
-   * @param key
-   */
-  isAppMetadata(key) {
-    return key.indexOf(APP_METADATA) !== -1;
-  }
-  /**
-   * returns if a given cache entity is of the type authoritymetadata
-   * @param key
-   */
-  isAuthorityMetadata(key) {
-    return key.indexOf(AUTHORITY_METADATA_CONSTANTS.CACHE_KEY) !== -1;
-  }
-  /**
-   * returns cache key used for cloud instance metadata
-   */
-  generateAuthorityMetadataCacheKey(authority) {
-    return `${AUTHORITY_METADATA_CONSTANTS.CACHE_KEY}-${this.clientId}-${authority}`;
-  }
-  /**
-   * Helper to convert serialized data to object
-   * @param obj
-   * @param json
-   */
-  static toObject(obj, json) {
-    for (const propertyName in json) {
-      obj[propertyName] = json[propertyName];
-    }
-    return obj;
-  }
-};
-var DefaultStorageClass = class extends CacheManager {
-  async setAccount() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getAccount() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  async setIdTokenCredential() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getIdTokenCredential() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  async setAccessTokenCredential() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getAccessTokenCredential() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  async setRefreshTokenCredential() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getRefreshTokenCredential() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  setAppMetadata() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getAppMetadata() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  setServerTelemetry() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getServerTelemetry() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  setAuthorityMetadata() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getAuthorityMetadata() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getAuthorityMetadataKeys() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  setThrottlingCache() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getThrottlingCache() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  removeItem() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getKeys() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getAccountKeys() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-  getTokenKeys() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/config/ClientConfiguration.mjs
-var DEFAULT_SYSTEM_OPTIONS = {
-  tokenRenewalOffsetSeconds: DEFAULT_TOKEN_RENEWAL_OFFSET_SEC,
-  preventCorsPreflight: false
-};
-var DEFAULT_LOGGER_IMPLEMENTATION = {
-  loggerCallback: () => {
-  },
-  piiLoggingEnabled: false,
-  logLevel: LogLevel.Info,
-  correlationId: Constants.EMPTY_STRING
-};
-var DEFAULT_CACHE_OPTIONS = {
-  claimsBasedCachingEnabled: false
-};
-var DEFAULT_NETWORK_IMPLEMENTATION = {
-  async sendGetRequestAsync() {
-    throw createClientAuthError(methodNotImplemented);
-  },
-  async sendPostRequestAsync() {
-    throw createClientAuthError(methodNotImplemented);
-  }
-};
-var DEFAULT_LIBRARY_INFO = {
-  sku: Constants.SKU,
-  version,
-  cpu: Constants.EMPTY_STRING,
-  os: Constants.EMPTY_STRING
-};
-var DEFAULT_CLIENT_CREDENTIALS = {
-  clientSecret: Constants.EMPTY_STRING,
-  clientAssertion: void 0
-};
-var DEFAULT_AZURE_CLOUD_OPTIONS = {
-  azureCloudInstance: AzureCloudInstance.None,
-  tenant: `${Constants.DEFAULT_COMMON_TENANT}`
-};
-var DEFAULT_TELEMETRY_OPTIONS = {
-  application: {
-    appName: "",
-    appVersion: ""
-  }
-};
-function buildClientConfiguration({ authOptions: userAuthOptions, systemOptions: userSystemOptions, loggerOptions: userLoggerOption, cacheOptions: userCacheOptions, storageInterface: storageImplementation, networkInterface: networkImplementation, cryptoInterface: cryptoImplementation, clientCredentials, libraryInfo, telemetry, serverTelemetryManager, persistencePlugin, serializableCache }) {
-  const loggerOptions = {
-    ...DEFAULT_LOGGER_IMPLEMENTATION,
-    ...userLoggerOption
-  };
-  return {
-    authOptions: buildAuthOptions(userAuthOptions),
-    systemOptions: { ...DEFAULT_SYSTEM_OPTIONS, ...userSystemOptions },
-    loggerOptions,
-    cacheOptions: { ...DEFAULT_CACHE_OPTIONS, ...userCacheOptions },
-    storageInterface: storageImplementation || new DefaultStorageClass(userAuthOptions.clientId, DEFAULT_CRYPTO_IMPLEMENTATION, new Logger(loggerOptions)),
-    networkInterface: networkImplementation || DEFAULT_NETWORK_IMPLEMENTATION,
-    cryptoInterface: cryptoImplementation || DEFAULT_CRYPTO_IMPLEMENTATION,
-    clientCredentials: clientCredentials || DEFAULT_CLIENT_CREDENTIALS,
-    libraryInfo: { ...DEFAULT_LIBRARY_INFO, ...libraryInfo },
-    telemetry: { ...DEFAULT_TELEMETRY_OPTIONS, ...telemetry },
-    serverTelemetryManager: serverTelemetryManager || null,
-    persistencePlugin: persistencePlugin || null,
-    serializableCache: serializableCache || null
-  };
-}
-function buildAuthOptions(authOptions) {
-  return {
-    clientCapabilities: [],
-    azureCloudOptions: DEFAULT_AZURE_CLOUD_OPTIONS,
-    skipAuthorityMetadataCache: false,
-    instanceAware: false,
-    encodeExtraQueryParams: false,
-    ...authOptions
-  };
-}
-function isOidcProtocolMode(config) {
-  return config.authOptions.authority.options.protocolMode === ProtocolMode.OIDC;
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/CcsCredential.mjs
-var CcsCredentialType = {
-  HOME_ACCOUNT_ID: "home_account_id",
-  UPN: "UPN"
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/request/RequestParameterBuilder.mjs
-var RequestParameterBuilder_exports = {};
-__export(RequestParameterBuilder_exports, {
-  addApplicationTelemetry: () => addApplicationTelemetry,
-  addAuthorizationCode: () => addAuthorizationCode,
-  addBrokerParameters: () => addBrokerParameters,
-  addCcsOid: () => addCcsOid,
-  addCcsUpn: () => addCcsUpn,
-  addClaims: () => addClaims,
-  addClientAssertion: () => addClientAssertion,
-  addClientAssertionType: () => addClientAssertionType,
-  addClientCapabilitiesToClaims: () => addClientCapabilitiesToClaims,
-  addClientId: () => addClientId,
-  addClientInfo: () => addClientInfo,
-  addClientSecret: () => addClientSecret,
-  addCodeChallengeParams: () => addCodeChallengeParams,
-  addCodeVerifier: () => addCodeVerifier,
-  addCorrelationId: () => addCorrelationId,
-  addDeviceCode: () => addDeviceCode,
-  addDomainHint: () => addDomainHint,
-  addEARParameters: () => addEARParameters,
-  addExtraQueryParameters: () => addExtraQueryParameters,
-  addGrantType: () => addGrantType,
-  addIdTokenHint: () => addIdTokenHint,
-  addInstanceAware: () => addInstanceAware,
-  addLibraryInfo: () => addLibraryInfo,
-  addLoginHint: () => addLoginHint,
-  addLogoutHint: () => addLogoutHint,
-  addNativeBroker: () => addNativeBroker,
-  addNonce: () => addNonce,
-  addOboAssertion: () => addOboAssertion,
-  addPassword: () => addPassword,
-  addPopToken: () => addPopToken,
-  addPostLogoutRedirectUri: () => addPostLogoutRedirectUri,
-  addPrompt: () => addPrompt,
-  addRedirectUri: () => addRedirectUri,
-  addRefreshToken: () => addRefreshToken,
-  addRequestTokenUse: () => addRequestTokenUse,
-  addResponseMode: () => addResponseMode,
-  addResponseType: () => addResponseType,
-  addScopes: () => addScopes,
-  addServerTelemetry: () => addServerTelemetry,
-  addSid: () => addSid,
-  addSshJwk: () => addSshJwk,
-  addState: () => addState,
-  addThrottling: () => addThrottling,
-  addUsername: () => addUsername,
-  instrumentBrokerParams: () => instrumentBrokerParams
-});
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/constants/AADServerParamKeys.mjs
-var AADServerParamKeys_exports = {};
-__export(AADServerParamKeys_exports, {
-  ACCESS_TOKEN: () => ACCESS_TOKEN,
-  BROKER_CLIENT_ID: () => BROKER_CLIENT_ID,
-  BROKER_REDIRECT_URI: () => BROKER_REDIRECT_URI,
-  CCS_HEADER: () => CCS_HEADER,
-  CLAIMS: () => CLAIMS,
-  CLIENT_ASSERTION: () => CLIENT_ASSERTION,
-  CLIENT_ASSERTION_TYPE: () => CLIENT_ASSERTION_TYPE,
-  CLIENT_ID: () => CLIENT_ID,
-  CLIENT_INFO: () => CLIENT_INFO2,
-  CLIENT_REQUEST_ID: () => CLIENT_REQUEST_ID,
-  CLIENT_SECRET: () => CLIENT_SECRET,
-  CODE: () => CODE,
-  CODE_CHALLENGE: () => CODE_CHALLENGE,
-  CODE_CHALLENGE_METHOD: () => CODE_CHALLENGE_METHOD,
-  CODE_VERIFIER: () => CODE_VERIFIER,
-  DEVICE_CODE: () => DEVICE_CODE,
-  DOMAIN_HINT: () => DOMAIN_HINT,
-  EAR_JWE_CRYPTO: () => EAR_JWE_CRYPTO,
-  EAR_JWK: () => EAR_JWK,
-  ERROR: () => ERROR,
-  ERROR_DESCRIPTION: () => ERROR_DESCRIPTION,
-  EXPIRES_IN: () => EXPIRES_IN,
-  FOCI: () => FOCI,
-  GRANT_TYPE: () => GRANT_TYPE,
-  ID_TOKEN: () => ID_TOKEN,
-  ID_TOKEN_HINT: () => ID_TOKEN_HINT,
-  INSTANCE_AWARE: () => INSTANCE_AWARE,
-  LOGIN_HINT: () => LOGIN_HINT,
-  LOGOUT_HINT: () => LOGOUT_HINT,
-  NATIVE_BROKER: () => NATIVE_BROKER,
-  NONCE: () => NONCE,
-  OBO_ASSERTION: () => OBO_ASSERTION,
-  ON_BEHALF_OF: () => ON_BEHALF_OF,
-  POST_LOGOUT_URI: () => POST_LOGOUT_URI,
-  PROMPT: () => PROMPT,
-  REDIRECT_URI: () => REDIRECT_URI,
-  REFRESH_TOKEN: () => REFRESH_TOKEN,
-  REFRESH_TOKEN_EXPIRES_IN: () => REFRESH_TOKEN_EXPIRES_IN,
-  REQUESTED_TOKEN_USE: () => REQUESTED_TOKEN_USE,
-  REQ_CNF: () => REQ_CNF,
-  RESPONSE_MODE: () => RESPONSE_MODE,
-  RESPONSE_TYPE: () => RESPONSE_TYPE,
-  RETURN_SPA_CODE: () => RETURN_SPA_CODE,
-  SCOPE: () => SCOPE,
-  SESSION_STATE: () => SESSION_STATE,
-  SID: () => SID,
-  STATE: () => STATE,
-  TOKEN_TYPE: () => TOKEN_TYPE,
-  X_APP_NAME: () => X_APP_NAME,
-  X_APP_VER: () => X_APP_VER,
-  X_CLIENT_CPU: () => X_CLIENT_CPU,
-  X_CLIENT_CURR_TELEM: () => X_CLIENT_CURR_TELEM,
-  X_CLIENT_EXTRA_SKU: () => X_CLIENT_EXTRA_SKU,
-  X_CLIENT_LAST_TELEM: () => X_CLIENT_LAST_TELEM,
-  X_CLIENT_OS: () => X_CLIENT_OS,
-  X_CLIENT_SKU: () => X_CLIENT_SKU,
-  X_CLIENT_VER: () => X_CLIENT_VER,
-  X_MS_LIB_CAPABILITY: () => X_MS_LIB_CAPABILITY
-});
-var CLIENT_ID = "client_id";
-var REDIRECT_URI = "redirect_uri";
-var RESPONSE_TYPE = "response_type";
-var RESPONSE_MODE = "response_mode";
-var GRANT_TYPE = "grant_type";
-var CLAIMS = "claims";
-var SCOPE = "scope";
-var ERROR = "error";
-var ERROR_DESCRIPTION = "error_description";
-var ACCESS_TOKEN = "access_token";
-var ID_TOKEN = "id_token";
-var REFRESH_TOKEN = "refresh_token";
-var EXPIRES_IN = "expires_in";
-var REFRESH_TOKEN_EXPIRES_IN = "refresh_token_expires_in";
-var STATE = "state";
-var NONCE = "nonce";
-var PROMPT = "prompt";
-var SESSION_STATE = "session_state";
-var CLIENT_INFO2 = "client_info";
-var CODE = "code";
-var CODE_CHALLENGE = "code_challenge";
-var CODE_CHALLENGE_METHOD = "code_challenge_method";
-var CODE_VERIFIER = "code_verifier";
-var CLIENT_REQUEST_ID = "client-request-id";
-var X_CLIENT_SKU = "x-client-SKU";
-var X_CLIENT_VER = "x-client-VER";
-var X_CLIENT_OS = "x-client-OS";
-var X_CLIENT_CPU = "x-client-CPU";
-var X_CLIENT_CURR_TELEM = "x-client-current-telemetry";
-var X_CLIENT_LAST_TELEM = "x-client-last-telemetry";
-var X_MS_LIB_CAPABILITY = "x-ms-lib-capability";
-var X_APP_NAME = "x-app-name";
-var X_APP_VER = "x-app-ver";
-var POST_LOGOUT_URI = "post_logout_redirect_uri";
-var ID_TOKEN_HINT = "id_token_hint";
-var DEVICE_CODE = "device_code";
-var CLIENT_SECRET = "client_secret";
-var CLIENT_ASSERTION = "client_assertion";
-var CLIENT_ASSERTION_TYPE = "client_assertion_type";
-var TOKEN_TYPE = "token_type";
-var REQ_CNF = "req_cnf";
-var OBO_ASSERTION = "assertion";
-var REQUESTED_TOKEN_USE = "requested_token_use";
-var ON_BEHALF_OF = "on_behalf_of";
-var FOCI = "foci";
-var CCS_HEADER = "X-AnchorMailbox";
-var RETURN_SPA_CODE = "return_spa_code";
-var NATIVE_BROKER = "nativebroker";
-var LOGOUT_HINT = "logout_hint";
-var SID = "sid";
-var LOGIN_HINT = "login_hint";
-var DOMAIN_HINT = "domain_hint";
-var X_CLIENT_EXTRA_SKU = "x-client-xtra-sku";
-var BROKER_CLIENT_ID = "brk_client_id";
-var BROKER_REDIRECT_URI = "brk_redirect_uri";
-var INSTANCE_AWARE = "instance_aware";
-var EAR_JWK = "ear_jwk";
-var EAR_JWE_CRYPTO = "ear_jwe_crypto";
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/request/RequestParameterBuilder.mjs
+// node_modules/@azure/msal-common/dist/request/RequestParameterBuilder.mjs
 function instrumentBrokerParams(parameters, correlationId, performanceClient) {
   if (!correlationId) {
     return;
@@ -34497,13 +33116,16 @@ function addGrantType(parameters, grantType) {
 function addClientInfo(parameters) {
   parameters.set(CLIENT_INFO, "1");
 }
+function addCliData(parameters) {
+  parameters.set(CLI_DATA, "1");
+}
 function addInstanceAware(parameters) {
   if (!parameters.has(INSTANCE_AWARE)) {
     parameters.set(INSTANCE_AWARE, "true");
   }
 }
-function addExtraQueryParameters(parameters, eQParams) {
-  Object.entries(eQParams).forEach(([key, value]) => {
+function addExtraParameters(parameters, extraParams) {
+  Object.entries(extraParams).forEach(([key, value]) => {
     if (!parameters.has(key) && value) {
       parameters.set(key, value);
     }
@@ -34553,7 +33175,7 @@ function addServerTelemetry(parameters, serverTelemetryManager) {
   parameters.set(X_CLIENT_LAST_TELEM, serverTelemetryManager.generateLastRequestHeaderValue());
 }
 function addThrottling(parameters) {
-  parameters.set(X_MS_LIB_CAPABILITY, ThrottlingConstants.X_MS_LIB_CAPABILITY_VALUE);
+  parameters.set(X_MS_LIB_CAPABILITY, X_MS_LIB_CAPABILITY_VALUE);
 }
 function addLogoutHint(parameters, logoutHint) {
   parameters.set(LOGOUT_HINT, logoutHint);
@@ -34571,528 +33193,2215 @@ function addEARParameters(parameters, jwk) {
   const jweCryptoB64Encoded = "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0";
   parameters.set(EAR_JWE_CRYPTO, jweCryptoB64Encoded);
 }
+function addResource(parameters, resource) {
+  if (resource) {
+    parameters.set(RESOURCE, resource);
+  }
+}
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityFactory.mjs
-var AuthorityFactory_exports = {};
-__export(AuthorityFactory_exports, {
-  createDiscoveredInstance: () => createDiscoveredInstance
+// node_modules/@azure/msal-common/dist/utils/UrlUtils.mjs
+var UrlUtils_exports = {};
+__export(UrlUtils_exports, {
+  getDeserializedResponse: () => getDeserializedResponse,
+  mapToQueryString: () => mapToQueryString,
+  normalizeUrlForComparison: () => normalizeUrlForComparison,
+  stripLeadingHashOrQuery: () => stripLeadingHashOrQuery
+});
+function canonicalizeUrl(url) {
+  if (!url) {
+    return url;
+  }
+  let lowerCaseUrl = url.toLowerCase();
+  if (StringUtils.endsWith(lowerCaseUrl, "?")) {
+    lowerCaseUrl = lowerCaseUrl.slice(0, -1);
+  } else if (StringUtils.endsWith(lowerCaseUrl, "?/")) {
+    lowerCaseUrl = lowerCaseUrl.slice(0, -2);
+  }
+  if (!StringUtils.endsWith(lowerCaseUrl, "/")) {
+    lowerCaseUrl += "/";
+  }
+  return lowerCaseUrl;
+}
+function stripLeadingHashOrQuery(responseString) {
+  if (responseString.startsWith("#/")) {
+    return responseString.substring(2);
+  } else if (responseString.startsWith("#") || responseString.startsWith("?")) {
+    return responseString.substring(1);
+  }
+  return responseString;
+}
+function getDeserializedResponse(responseString) {
+  if (!responseString || responseString.indexOf("=") < 0) {
+    return null;
+  }
+  try {
+    const normalizedResponse = stripLeadingHashOrQuery(responseString);
+    const deserializedHash = Object.fromEntries(new URLSearchParams(normalizedResponse));
+    if (deserializedHash.code || deserializedHash.ear_jwe || deserializedHash.error || deserializedHash.error_description || deserializedHash.state) {
+      return deserializedHash;
+    }
+  } catch (e) {
+    throw createClientAuthError(hashNotDeserialized);
+  }
+  return null;
+}
+function mapToQueryString(parameters) {
+  const queryParameterArray = new Array();
+  parameters.forEach((value, key) => {
+    queryParameterArray.push(`${key}=${encodeURIComponent(value)}`);
+  });
+  return queryParameterArray.join("&");
+}
+function normalizeUrlForComparison(url) {
+  if (!url) {
+    return url;
+  }
+  const urlWithoutHash = url.split("#")[0];
+  try {
+    const urlObj = new URL(urlWithoutHash);
+    const normalizedUrl = urlObj.origin + urlObj.pathname + urlObj.search;
+    return canonicalizeUrl(normalizedUrl);
+  } catch (e) {
+    return canonicalizeUrl(urlWithoutHash);
+  }
+}
+
+// node_modules/@azure/msal-common/dist/crypto/ICrypto.mjs
+var DEFAULT_CRYPTO_IMPLEMENTATION = {
+  createNewGuid: () => {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  base64Decode: () => {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  base64Encode: () => {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  base64UrlEncode: () => {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  encodeKid: () => {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  async getPublicKeyThumbprint() {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  async removeTokenBindingKey() {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  async clearKeystore() {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  async signJwt() {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  async hashString() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+};
+
+// node_modules/@azure/msal-common/dist/logger/Logger.mjs
+var LogLevel;
+(function(LogLevel2) {
+  LogLevel2[LogLevel2["Error"] = 0] = "Error";
+  LogLevel2[LogLevel2["Warning"] = 1] = "Warning";
+  LogLevel2[LogLevel2["Info"] = 2] = "Info";
+  LogLevel2[LogLevel2["Verbose"] = 3] = "Verbose";
+  LogLevel2[LogLevel2["Trace"] = 4] = "Trace";
+})(LogLevel || (LogLevel = {}));
+var CACHE_CAPACITY = 50;
+var MAX_LOGS_PER_CORRELATION = 500;
+var correlationCache = /* @__PURE__ */ new Map();
+function markAsRecentlyUsed(correlationId, data) {
+  correlationCache.delete(correlationId);
+  correlationCache.set(correlationId, data);
+}
+function addLogToCache(correlationId, loggedMessage) {
+  const currentTime = Date.now();
+  let data = correlationCache.get(correlationId);
+  if (data) {
+    markAsRecentlyUsed(correlationId, data);
+  } else {
+    data = { logs: [], firstEventTime: currentTime };
+    correlationCache.set(correlationId, data);
+    if (correlationCache.size > CACHE_CAPACITY) {
+      const firstKey = correlationCache.keys().next().value;
+      if (firstKey) {
+        correlationCache.delete(firstKey);
+      }
+    }
+  }
+  data.logs.push({
+    ...loggedMessage,
+    milliseconds: currentTime - data.firstEventTime
+  });
+  if (data.logs.length > MAX_LOGS_PER_CORRELATION) {
+    data.logs.shift();
+  }
+}
+function isHashedString(str) {
+  if (str.length !== 6) {
+    return false;
+  }
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    const isAlphaNumeric = char >= "a" && char <= "z" || char >= "A" && char <= "Z" || char >= "0" && char <= "9";
+    if (!isAlphaNumeric) {
+      return false;
+    }
+  }
+  return true;
+}
+var Logger = class _Logger {
+  constructor(loggerOptions, packageName, packageVersion) {
+    this.level = LogLevel.Info;
+    const defaultLoggerCallback2 = () => {
+      return;
+    };
+    const setLoggerOptions = loggerOptions || _Logger.createDefaultLoggerOptions();
+    this.localCallback = setLoggerOptions.loggerCallback || defaultLoggerCallback2;
+    this.piiLoggingEnabled = setLoggerOptions.piiLoggingEnabled || false;
+    this.level = typeof setLoggerOptions.logLevel === "number" ? setLoggerOptions.logLevel : LogLevel.Info;
+    this.packageName = packageName || "";
+    this.packageVersion = packageVersion || "";
+  }
+  static createDefaultLoggerOptions() {
+    return {
+      loggerCallback: () => {
+      },
+      piiLoggingEnabled: false,
+      logLevel: LogLevel.Info
+    };
+  }
+  /**
+   * Create new Logger with existing configurations.
+   */
+  clone(packageName, packageVersion) {
+    return new _Logger({
+      loggerCallback: this.localCallback,
+      piiLoggingEnabled: this.piiLoggingEnabled,
+      logLevel: this.level
+    }, packageName, packageVersion);
+  }
+  /**
+   * Log message with required options.
+   */
+  logMessage(logMessage, options) {
+    const correlationId = options.correlationId;
+    const isHashedInput = isHashedString(logMessage);
+    if (isHashedInput) {
+      const loggedMessage = {
+        hash: logMessage,
+        level: options.logLevel,
+        containsPii: options.containsPii || false,
+        milliseconds: 0
+        // Will be calculated in addLogToCache
+      };
+      addLogToCache(correlationId, loggedMessage);
+    }
+    if (options.logLevel > this.level || !this.piiLoggingEnabled && options.containsPii) {
+      return;
+    }
+    const timestamp = (/* @__PURE__ */ new Date()).toUTCString();
+    const logHeader = `[${timestamp}] : [${correlationId}]`;
+    const log3 = `${logHeader} : ${this.packageName}@${this.packageVersion} : ${LogLevel[options.logLevel]} - ${logMessage}`;
+    this.executeCallback(options.logLevel, log3, options.containsPii || false);
+  }
+  /**
+   * Execute callback with message.
+   */
+  executeCallback(level, message, containsPii) {
+    if (this.localCallback) {
+      this.localCallback(level, message, containsPii);
+    }
+  }
+  /**
+   * Logs error messages.
+   */
+  error(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Error,
+      containsPii: false,
+      correlationId
+    });
+  }
+  /**
+   * Logs error messages with PII.
+   */
+  errorPii(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Error,
+      containsPii: true,
+      correlationId
+    });
+  }
+  /**
+   * Logs warning messages.
+   */
+  warning(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Warning,
+      containsPii: false,
+      correlationId
+    });
+  }
+  /**
+   * Logs warning messages with PII.
+   */
+  warningPii(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Warning,
+      containsPii: true,
+      correlationId
+    });
+  }
+  /**
+   * Logs info messages.
+   */
+  info(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Info,
+      containsPii: false,
+      correlationId
+    });
+  }
+  /**
+   * Logs info messages with PII.
+   */
+  infoPii(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Info,
+      containsPii: true,
+      correlationId
+    });
+  }
+  /**
+   * Logs verbose messages.
+   */
+  verbose(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Verbose,
+      containsPii: false,
+      correlationId
+    });
+  }
+  /**
+   * Logs verbose messages with PII.
+   */
+  verbosePii(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Verbose,
+      containsPii: true,
+      correlationId
+    });
+  }
+  /**
+   * Logs trace messages.
+   */
+  trace(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Trace,
+      containsPii: false,
+      correlationId
+    });
+  }
+  /**
+   * Logs trace messages with PII.
+   */
+  tracePii(message, correlationId) {
+    this.logMessage(message, {
+      logLevel: LogLevel.Trace,
+      containsPii: true,
+      correlationId
+    });
+  }
+  /**
+   * Returns whether PII Logging is enabled or not.
+   */
+  isPiiLoggingEnabled() {
+    return this.piiLoggingEnabled || false;
+  }
+};
+
+// node_modules/@azure/msal-common/dist/packageMetadata.mjs
+var name = "@azure/msal-common";
+var version = "16.4.0";
+
+// node_modules/@azure/msal-common/dist/authority/AuthorityOptions.mjs
+var AzureCloudInstance = {
+  // AzureCloudInstance is not specified.
+  None: "none",
+  // Microsoft Azure public cloud
+  AzurePublic: "https://login.microsoftonline.com",
+  // Microsoft PPE
+  AzurePpe: "https://login.windows-ppe.net",
+  // Microsoft Chinese national/regional cloud
+  AzureChina: "https://login.chinacloudapi.cn",
+  // Microsoft German national/regional cloud ("Black Forest")
+  AzureGermany: "https://login.microsoftonline.de",
+  // US Government cloud
+  AzureUsGovernment: "https://login.microsoftonline.us"
+};
+
+// node_modules/@azure/msal-common/dist/account/AccountInfo.mjs
+function tenantIdMatchesHomeTenant(tenantId, homeAccountId) {
+  return !!tenantId && !!homeAccountId && tenantId === homeAccountId.split(".")[1];
+}
+function buildTenantProfile(homeAccountId, localAccountId, tenantId, idTokenClaims) {
+  if (idTokenClaims) {
+    const { oid, sub, tid, name: name3, tfp, acr, preferred_username, upn, login_hint } = idTokenClaims;
+    const tenantId2 = tid || tfp || acr || "";
+    return {
+      tenantId: tenantId2,
+      localAccountId: oid || sub || "",
+      name: name3,
+      username: preferred_username || upn || "",
+      loginHint: login_hint,
+      isHomeTenant: tenantIdMatchesHomeTenant(tenantId2, homeAccountId)
+    };
+  } else {
+    return {
+      tenantId,
+      localAccountId,
+      username: "",
+      isHomeTenant: tenantIdMatchesHomeTenant(tenantId, homeAccountId)
+    };
+  }
+}
+function updateAccountTenantProfileData(baseAccountInfo, tenantProfile, idTokenClaims, idTokenSecret) {
+  let updatedAccountInfo = baseAccountInfo;
+  if (tenantProfile) {
+    const { isHomeTenant, ...tenantProfileOverride } = tenantProfile;
+    updatedAccountInfo = { ...baseAccountInfo, ...tenantProfileOverride };
+  }
+  if (idTokenClaims) {
+    const { isHomeTenant, ...claimsSourcedTenantProfile } = buildTenantProfile(baseAccountInfo.homeAccountId, baseAccountInfo.localAccountId, baseAccountInfo.tenantId, idTokenClaims);
+    updatedAccountInfo = {
+      ...updatedAccountInfo,
+      ...claimsSourcedTenantProfile,
+      idTokenClaims,
+      idToken: idTokenSecret
+    };
+    return updatedAccountInfo;
+  }
+  return updatedAccountInfo;
+}
+
+// node_modules/@azure/msal-common/dist/account/AuthToken.mjs
+var AuthToken_exports = {};
+__export(AuthToken_exports, {
+  checkMaxAge: () => checkMaxAge,
+  extractTokenClaims: () => extractTokenClaims,
+  getJWSPayload: () => getJWSPayload,
+  isKmsi: () => isKmsi
+});
+function extractTokenClaims(encodedToken, base64Decode) {
+  const jswPayload = getJWSPayload(encodedToken);
+  try {
+    const base64Decoded = base64Decode(jswPayload);
+    return JSON.parse(base64Decoded);
+  } catch (err) {
+    throw createClientAuthError(tokenParsingError);
+  }
+}
+function isKmsi(idTokenClaims) {
+  if (!idTokenClaims.signin_state) {
+    return false;
+  }
+  const kmsiClaims = ["kmsi", "dvc_dmjd"];
+  return idTokenClaims.signin_state.some((value) => kmsiClaims.includes(value.trim().toLowerCase()));
+}
+function getJWSPayload(authToken) {
+  if (!authToken) {
+    throw createClientAuthError(nullOrEmptyToken);
+  }
+  const tokenPartsRegex = /^([^\.\s]*)\.([^\.\s]+)\.([^\.\s]*)$/;
+  const matches = tokenPartsRegex.exec(authToken);
+  if (!matches || matches.length < 4) {
+    throw createClientAuthError(tokenParsingError);
+  }
+  return matches[2];
+}
+function checkMaxAge(authTime, maxAge) {
+  const fiveMinuteSkew = 3e5;
+  if (maxAge === 0 || Date.now() - fiveMinuteSkew > authTime + maxAge) {
+    throw createClientAuthError(maxAgeTranspired);
+  }
+}
+
+// node_modules/@azure/msal-common/dist/url/UrlString.mjs
+var UrlString = class _UrlString {
+  get urlString() {
+    return this._urlString;
+  }
+  constructor(url) {
+    this._urlString = url;
+    if (!this._urlString) {
+      throw createClientConfigurationError(urlEmptyError);
+    }
+    if (!url.includes("#")) {
+      this._urlString = _UrlString.canonicalizeUri(url);
+    }
+  }
+  /**
+   * Ensure urls are lower case and end with a / character.
+   * @param url
+   */
+  static canonicalizeUri(url) {
+    if (url) {
+      let lowerCaseUrl = url.toLowerCase();
+      if (StringUtils.endsWith(lowerCaseUrl, "?")) {
+        lowerCaseUrl = lowerCaseUrl.slice(0, -1);
+      } else if (StringUtils.endsWith(lowerCaseUrl, "?/")) {
+        lowerCaseUrl = lowerCaseUrl.slice(0, -2);
+      }
+      if (!StringUtils.endsWith(lowerCaseUrl, "/")) {
+        lowerCaseUrl += "/";
+      }
+      return lowerCaseUrl;
+    }
+    return url;
+  }
+  /**
+   * Throws if urlString passed is not a valid authority URI string.
+   */
+  validateAsUri() {
+    let components;
+    try {
+      components = this.getUrlComponents();
+    } catch (e) {
+      throw createClientConfigurationError(urlParseError);
+    }
+    if (!components.HostNameAndPort || !components.PathSegments) {
+      throw createClientConfigurationError(urlParseError);
+    }
+    if (!components.Protocol || components.Protocol.toLowerCase() !== "https:") {
+      throw createClientConfigurationError(authorityUriInsecure);
+    }
+  }
+  /**
+   * Given a url and a query string return the url with provided query string appended
+   * @param url
+   * @param queryString
+   */
+  static appendQueryString(url, queryString) {
+    if (!queryString) {
+      return url;
+    }
+    return url.indexOf("?") < 0 ? `${url}?${queryString}` : `${url}&${queryString}`;
+  }
+  /**
+   * Returns a url with the hash removed
+   * @param url
+   */
+  static removeHashFromUrl(url) {
+    return _UrlString.canonicalizeUri(url.split("#")[0]);
+  }
+  /**
+   * Given a url like https://a:b/common/d?e=f#g, and a tenantId, returns https://a:b/tenantId/d
+   * @param href The url
+   * @param tenantId The tenant id to replace
+   */
+  replaceTenantPath(tenantId) {
+    const urlObject = this.getUrlComponents();
+    const pathArray = urlObject.PathSegments;
+    if (tenantId && pathArray.length !== 0 && (pathArray[0] === AADAuthority.COMMON || pathArray[0] === AADAuthority.ORGANIZATIONS)) {
+      pathArray[0] = tenantId;
+    }
+    return _UrlString.constructAuthorityUriFromObject(urlObject);
+  }
+  /**
+   * Parses out the components from a url string.
+   * @returns An object with the various components. Please cache this value insted of calling this multiple times on the same url.
+   */
+  getUrlComponents() {
+    const regEx = RegExp("^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\\?([^#]*))?(#(.*))?");
+    const match = this.urlString.match(regEx);
+    if (!match) {
+      throw createClientConfigurationError(urlParseError);
+    }
+    const urlComponents = {
+      Protocol: match[1],
+      HostNameAndPort: match[4],
+      AbsolutePath: match[5],
+      QueryString: match[7]
+    };
+    let pathSegments = urlComponents.AbsolutePath.split("/");
+    pathSegments = pathSegments.filter((val) => val && val.length > 0);
+    urlComponents.PathSegments = pathSegments;
+    if (urlComponents.QueryString && urlComponents.QueryString.endsWith("/")) {
+      urlComponents.QueryString = urlComponents.QueryString.substring(0, urlComponents.QueryString.length - 1);
+    }
+    return urlComponents;
+  }
+  static getDomainFromUrl(url) {
+    const regEx = RegExp("^([^:/?#]+://)?([^/?#]*)");
+    const match = url.match(regEx);
+    if (!match) {
+      throw createClientConfigurationError(urlParseError);
+    }
+    return match[2];
+  }
+  static getAbsoluteUrl(relativeUrl, baseUrl) {
+    if (relativeUrl[0] === FORWARD_SLASH) {
+      const url = new _UrlString(baseUrl);
+      const baseComponents = url.getUrlComponents();
+      return baseComponents.Protocol + "//" + baseComponents.HostNameAndPort + relativeUrl;
+    }
+    return relativeUrl;
+  }
+  static constructAuthorityUriFromObject(urlObject) {
+    return new _UrlString(urlObject.Protocol + "//" + urlObject.HostNameAndPort + "/" + urlObject.PathSegments.join("/"));
+  }
+};
+
+// node_modules/@azure/msal-common/dist/authority/AuthorityMetadata.mjs
+var endpointHosts = [
+  { host: "login.microsoftonline.com" },
+  {
+    host: "login.chinacloudapi.cn",
+    issuerHost: "login.partner.microsoftonline.cn"
+    // Issuer differs
+  },
+  { host: "login.microsoftonline.us" },
+  { host: "login.sovcloud-identity.fr" },
+  { host: "login.sovcloud-identity.de" },
+  { host: "login.sovcloud-identity.sg" }
+];
+function buildOpenIdConfig(host, issuerHost) {
+  return {
+    token_endpoint: `https://${host}/{tenantid}/oauth2/v2.0/token`,
+    jwks_uri: `https://${host}/{tenantid}/discovery/v2.0/keys`,
+    issuer: `https://${issuerHost}/{tenantid}/v2.0`,
+    authorization_endpoint: `https://${host}/{tenantid}/oauth2/v2.0/authorize`,
+    end_session_endpoint: `https://${host}/{tenantid}/oauth2/v2.0/logout`
+  };
+}
+var dynamicEndpointMetadata = endpointHosts.reduce((acc, { host, issuerHost }) => {
+  acc[host] = buildOpenIdConfig(host, issuerHost || host);
+  return acc;
+}, {});
+var rawMetdataJSON = {
+  endpointMetadata: dynamicEndpointMetadata,
+  instanceDiscoveryMetadata: {
+    metadata: [
+      {
+        preferred_network: "login.microsoftonline.com",
+        preferred_cache: "login.windows.net",
+        aliases: [
+          "login.microsoftonline.com",
+          "login.windows.net",
+          "login.microsoft.com",
+          "sts.windows.net"
+        ]
+      },
+      {
+        preferred_network: "login.partner.microsoftonline.cn",
+        preferred_cache: "login.partner.microsoftonline.cn",
+        aliases: [
+          "login.partner.microsoftonline.cn",
+          "login.chinacloudapi.cn"
+        ]
+      },
+      {
+        preferred_network: "login.microsoftonline.de",
+        preferred_cache: "login.microsoftonline.de",
+        aliases: ["login.microsoftonline.de"]
+      },
+      {
+        preferred_network: "login.microsoftonline.us",
+        preferred_cache: "login.microsoftonline.us",
+        aliases: [
+          "login.microsoftonline.us",
+          "login.usgovcloudapi.net"
+        ]
+      },
+      {
+        preferred_network: "login-us.microsoftonline.com",
+        preferred_cache: "login-us.microsoftonline.com",
+        aliases: ["login-us.microsoftonline.com"]
+      },
+      {
+        preferred_network: "login.sovcloud-identity.fr",
+        preferred_cache: "login.sovcloud-identity.fr",
+        aliases: ["login.sovcloud-identity.fr"]
+      },
+      {
+        preferred_network: "login.sovcloud-identity.de",
+        preferred_cache: "login.sovcloud-identity.de",
+        aliases: ["login.sovcloud-identity.de"]
+      },
+      {
+        preferred_network: "login.sovcloud-identity.sg",
+        preferred_cache: "login.sovcloud-identity.sg",
+        aliases: ["login.sovcloud-identity.sg"]
+      }
+    ]
+  }
+};
+var EndpointMetadata = rawMetdataJSON.endpointMetadata;
+var InstanceDiscoveryMetadata = rawMetdataJSON.instanceDiscoveryMetadata;
+var InstanceDiscoveryMetadataAliases = /* @__PURE__ */ new Set();
+InstanceDiscoveryMetadata.metadata.forEach((metadataEntry) => {
+  metadataEntry.aliases.forEach((alias) => {
+    InstanceDiscoveryMetadataAliases.add(alias);
+  });
+});
+function getAliasesFromStaticSources(staticAuthorityOptions, logger31, correlationId) {
+  let staticAliases;
+  const canonicalAuthority = staticAuthorityOptions.canonicalAuthority;
+  if (canonicalAuthority) {
+    const authorityHost = new UrlString(canonicalAuthority).getUrlComponents().HostNameAndPort;
+    staticAliases = getAliasesFromMetadata(logger31, correlationId, authorityHost, staticAuthorityOptions.cloudDiscoveryMetadata?.metadata, AuthorityMetadataSource.CONFIG) || getAliasesFromMetadata(logger31, correlationId, authorityHost, InstanceDiscoveryMetadata.metadata, AuthorityMetadataSource.HARDCODED_VALUES) || staticAuthorityOptions.knownAuthorities;
+  }
+  return staticAliases || [];
+}
+function getAliasesFromMetadata(logger31, correlationId, authorityHost, cloudDiscoveryMetadata, source) {
+  logger31.trace(`getAliasesFromMetadata called with source: '${source}'`, correlationId);
+  if (authorityHost && cloudDiscoveryMetadata) {
+    const metadata = getCloudDiscoveryMetadataFromNetworkResponse(cloudDiscoveryMetadata, authorityHost);
+    if (metadata) {
+      logger31.trace(`getAliasesFromMetadata: found cloud discovery metadata in '${source}', returning aliases`, correlationId);
+      return metadata.aliases;
+    } else {
+      logger31.trace(`getAliasesFromMetadata: did not find cloud discovery metadata in '${source}'`, correlationId);
+    }
+  }
+  return null;
+}
+function getCloudDiscoveryMetadataFromHardcodedValues(authorityHost) {
+  const metadata = getCloudDiscoveryMetadataFromNetworkResponse(InstanceDiscoveryMetadata.metadata, authorityHost);
+  return metadata;
+}
+function getCloudDiscoveryMetadataFromNetworkResponse(response, authorityHost) {
+  for (let i = 0; i < response.length; i++) {
+    const metadata = response[i];
+    if (metadata.aliases.includes(authorityHost)) {
+      return metadata;
+    }
+  }
+  return null;
+}
+
+// node_modules/@azure/msal-common/dist/error/CacheErrorCodes.mjs
+var cacheQuotaExceeded = "cache_quota_exceeded";
+var cacheErrorUnknown = "cache_error_unknown";
+
+// node_modules/@azure/msal-common/dist/error/CacheError.mjs
+var CacheError = class _CacheError extends Error {
+  constructor(errorCode, errorMessage) {
+    const message = errorMessage || getDefaultErrorMessage(errorCode);
+    super(message);
+    Object.setPrototypeOf(this, _CacheError.prototype);
+    this.name = "CacheError";
+    this.errorCode = errorCode;
+    this.errorMessage = message;
+  }
+};
+function createCacheError(e) {
+  if (!(e instanceof Error)) {
+    return new CacheError(cacheErrorUnknown);
+  }
+  if (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.message.includes("exceeded the quota")) {
+    return new CacheError(cacheQuotaExceeded);
+  } else {
+    return new CacheError(e.name, e.message);
+  }
+}
+
+// node_modules/@azure/msal-common/dist/cache/utils/AccountEntityUtils.mjs
+var AccountEntityUtils_exports = {};
+__export(AccountEntityUtils_exports, {
+  createAccountEntity: () => createAccountEntity,
+  createAccountEntityFromAccountInfo: () => createAccountEntityFromAccountInfo,
+  generateAccountId: () => generateAccountId,
+  generateHomeAccountId: () => generateHomeAccountId,
+  getAccountInfo: () => getAccountInfo,
+  isAccountEntity: () => isAccountEntity,
+  isSingleTenant: () => isSingleTenant
 });
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/OpenIdConfigResponse.mjs
-function isOpenIdConfigResponse(response) {
-  return response.hasOwnProperty("authorization_endpoint") && response.hasOwnProperty("token_endpoint") && response.hasOwnProperty("issuer") && response.hasOwnProperty("jwks_uri");
+// node_modules/@azure/msal-common/dist/account/ClientInfo.mjs
+function buildClientInfo(rawClientInfo, base64Decode) {
+  if (!rawClientInfo) {
+    throw createClientAuthError(clientInfoEmptyError);
+  }
+  try {
+    const decodedClientInfo = base64Decode(rawClientInfo);
+    return JSON.parse(decodedClientInfo);
+  } catch (e) {
+    throw createClientAuthError(clientInfoDecodingError);
+  }
+}
+function buildClientInfoFromHomeAccountId(homeAccountId) {
+  if (!homeAccountId) {
+    throw createClientAuthError(clientInfoDecodingError);
+  }
+  const clientInfoParts = homeAccountId.split(CLIENT_INFO_SEPARATOR, 2);
+  return {
+    uid: clientInfoParts[0],
+    utid: clientInfoParts.length < 2 ? "" : clientInfoParts[1]
+  };
 }
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/CloudInstanceDiscoveryResponse.mjs
-function isCloudInstanceDiscoveryResponse(response) {
-  return response.hasOwnProperty("tenant_discovery_endpoint") && response.hasOwnProperty("metadata");
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/CloudInstanceDiscoveryErrorResponse.mjs
-function isCloudInstanceDiscoveryErrorResponse(response) {
-  return response.hasOwnProperty("error") && response.hasOwnProperty("error_description");
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/telemetry/performance/PerformanceEvent.mjs
-var PerformanceEvents = {
-  /**
-   * acquireTokenByCode API (msal-browser and msal-node).
-   * Used to acquire tokens by trading an authorization code against the token endpoint.
-   */
-  AcquireTokenByCode: "acquireTokenByCode",
-  /**
-   * acquireTokenByRefreshToken API (msal-browser and msal-node).
-   * Used to renew an access token using a refresh token against the token endpoint.
-   */
-  AcquireTokenByRefreshToken: "acquireTokenByRefreshToken",
-  /**
-   * acquireTokenSilent API (msal-browser and msal-node).
-   * Used to silently acquire a new access token (from the cache or the network).
-   */
-  AcquireTokenSilent: "acquireTokenSilent",
-  /**
-   * acquireTokenSilentAsync (msal-browser).
-   * Internal API for acquireTokenSilent.
-   */
-  AcquireTokenSilentAsync: "acquireTokenSilentAsync",
-  /**
-   * acquireTokenPopup (msal-browser).
-   * Used to acquire a new access token interactively through pop ups
-   */
-  AcquireTokenPopup: "acquireTokenPopup",
-  /**
-   * acquireTokenPreRedirect (msal-browser).
-   * First part of the redirect flow.
-   * Used to acquire a new access token interactively through redirects.
-   */
-  AcquireTokenPreRedirect: "acquireTokenPreRedirect",
-  /**
-   * acquireTokenRedirect (msal-browser).
-   * Second part of the redirect flow.
-   * Used to acquire a new access token interactively through redirects.
-   */
-  AcquireTokenRedirect: "acquireTokenRedirect",
-  /**
-   * getPublicKeyThumbprint API in CryptoOpts class (msal-browser).
-   * Used to generate a public/private keypair and generate a public key thumbprint for pop requests.
-   */
-  CryptoOptsGetPublicKeyThumbprint: "cryptoOptsGetPublicKeyThumbprint",
-  /**
-   * signJwt API in CryptoOpts class (msal-browser).
-   * Used to signed a pop token.
-   */
-  CryptoOptsSignJwt: "cryptoOptsSignJwt",
-  /**
-   * acquireToken API in the SilentCacheClient class (msal-browser).
-   * Used to read access tokens from the cache.
-   */
-  SilentCacheClientAcquireToken: "silentCacheClientAcquireToken",
-  /**
-   * acquireToken API in the SilentIframeClient class (msal-browser).
-   * Used to acquire a new set of tokens from the authorize endpoint in a hidden iframe.
-   */
-  SilentIframeClientAcquireToken: "silentIframeClientAcquireToken",
-  AwaitConcurrentIframe: "awaitConcurrentIframe",
-  /**
-   * acquireToken API in SilentRereshClient (msal-browser).
-   * Used to acquire a new set of tokens from the token endpoint using a refresh token.
-   */
-  SilentRefreshClientAcquireToken: "silentRefreshClientAcquireToken",
-  /**
-   * ssoSilent API (msal-browser).
-   * Used to silently acquire an authorization code and set of tokens using a hidden iframe.
-   */
-  SsoSilent: "ssoSilent",
-  /**
-   * getDiscoveredAuthority API in StandardInteractionClient class (msal-browser).
-   * Used to load authority metadata for a request.
-   */
-  StandardInteractionClientGetDiscoveredAuthority: "standardInteractionClientGetDiscoveredAuthority",
-  /**
-   * acquireToken APIs in msal-browser.
-   * Used to make an /authorize endpoint call with native brokering enabled.
-   */
-  FetchAccountIdWithNativeBroker: "fetchAccountIdWithNativeBroker",
-  /**
-   * acquireToken API in NativeInteractionClient class (msal-browser).
-   * Used to acquire a token from Native component when native brokering is enabled.
-   */
-  NativeInteractionClientAcquireToken: "nativeInteractionClientAcquireToken",
-  /**
-   * Time spent creating default headers for requests to token endpoint
-   */
-  BaseClientCreateTokenRequestHeaders: "baseClientCreateTokenRequestHeaders",
-  /**
-   * Time spent sending/waiting for the response of a request to the token endpoint
-   */
-  NetworkClientSendPostRequestAsync: "networkClientSendPostRequestAsync",
-  RefreshTokenClientExecutePostToTokenEndpoint: "refreshTokenClientExecutePostToTokenEndpoint",
-  AuthorizationCodeClientExecutePostToTokenEndpoint: "authorizationCodeClientExecutePostToTokenEndpoint",
-  /**
-   * Used to measure the time taken for completing embedded-broker handshake (PW-Broker).
-   */
-  BrokerHandhshake: "brokerHandshake",
-  /**
-   * acquireTokenByRefreshToken API in BrokerClientApplication (PW-Broker) .
-   */
-  AcquireTokenByRefreshTokenInBroker: "acquireTokenByRefreshTokenInBroker",
-  /**
-   * Time taken for token acquisition by broker
-   */
-  AcquireTokenByBroker: "acquireTokenByBroker",
-  /**
-   * Time spent on the network for refresh token acquisition
-   */
-  RefreshTokenClientExecuteTokenRequest: "refreshTokenClientExecuteTokenRequest",
-  /**
-   * Time taken for acquiring refresh token , records RT size
-   */
-  RefreshTokenClientAcquireToken: "refreshTokenClientAcquireToken",
-  /**
-   * Time taken for acquiring cached refresh token
-   */
-  RefreshTokenClientAcquireTokenWithCachedRefreshToken: "refreshTokenClientAcquireTokenWithCachedRefreshToken",
-  /**
-   * acquireTokenByRefreshToken API in RefreshTokenClient (msal-common).
-   */
-  RefreshTokenClientAcquireTokenByRefreshToken: "refreshTokenClientAcquireTokenByRefreshToken",
-  /**
-   * Helper function to create token request body in RefreshTokenClient (msal-common).
-   */
-  RefreshTokenClientCreateTokenRequestBody: "refreshTokenClientCreateTokenRequestBody",
-  /**
-   * acquireTokenFromCache (msal-browser).
-   * Internal API for acquiring token from cache
-   */
-  AcquireTokenFromCache: "acquireTokenFromCache",
-  SilentFlowClientAcquireCachedToken: "silentFlowClientAcquireCachedToken",
-  SilentFlowClientGenerateResultFromCacheRecord: "silentFlowClientGenerateResultFromCacheRecord",
-  /**
-   * acquireTokenBySilentIframe (msal-browser).
-   * Internal API for acquiring token by silent Iframe
-   */
-  AcquireTokenBySilentIframe: "acquireTokenBySilentIframe",
-  /**
-   * Internal API for initializing base request in BaseInteractionClient (msal-browser)
-   */
-  InitializeBaseRequest: "initializeBaseRequest",
-  /**
-   * Internal API for initializing silent request in SilentCacheClient (msal-browser)
-   */
-  InitializeSilentRequest: "initializeSilentRequest",
-  InitializeClientApplication: "initializeClientApplication",
-  InitializeCache: "initializeCache",
-  /**
-   * Helper function in SilentIframeClient class (msal-browser).
-   */
-  SilentIframeClientTokenHelper: "silentIframeClientTokenHelper",
-  /**
-   * SilentHandler
-   */
-  SilentHandlerInitiateAuthRequest: "silentHandlerInitiateAuthRequest",
-  SilentHandlerMonitorIframeForHash: "silentHandlerMonitorIframeForHash",
-  SilentHandlerLoadFrame: "silentHandlerLoadFrame",
-  SilentHandlerLoadFrameSync: "silentHandlerLoadFrameSync",
-  /**
-   * Helper functions in StandardInteractionClient class (msal-browser)
-   */
-  StandardInteractionClientCreateAuthCodeClient: "standardInteractionClientCreateAuthCodeClient",
-  StandardInteractionClientGetClientConfiguration: "standardInteractionClientGetClientConfiguration",
-  StandardInteractionClientInitializeAuthorizationRequest: "standardInteractionClientInitializeAuthorizationRequest",
-  /**
-   * getAuthCodeUrl API (msal-browser and msal-node).
-   */
-  GetAuthCodeUrl: "getAuthCodeUrl",
-  GetStandardParams: "getStandardParams",
-  /**
-   * Functions from InteractionHandler (msal-browser)
-   */
-  HandleCodeResponseFromServer: "handleCodeResponseFromServer",
-  HandleCodeResponse: "handleCodeResponse",
-  HandleResponseEar: "handleResponseEar",
-  HandleResponsePlatformBroker: "handleResponsePlatformBroker",
-  HandleResponseCode: "handleResponseCode",
-  UpdateTokenEndpointAuthority: "updateTokenEndpointAuthority",
-  /**
-   * APIs in Authorization Code Client (msal-common)
-   */
-  AuthClientAcquireToken: "authClientAcquireToken",
-  AuthClientExecuteTokenRequest: "authClientExecuteTokenRequest",
-  AuthClientCreateTokenRequestBody: "authClientCreateTokenRequestBody",
-  /**
-   * Generate functions in PopTokenGenerator (msal-common)
-   */
-  PopTokenGenerateCnf: "popTokenGenerateCnf",
-  PopTokenGenerateKid: "popTokenGenerateKid",
-  /**
-   * handleServerTokenResponse API in ResponseHandler (msal-common)
-   */
-  HandleServerTokenResponse: "handleServerTokenResponse",
-  DeserializeResponse: "deserializeResponse",
-  /**
-   * Authority functions
-   */
-  AuthorityFactoryCreateDiscoveredInstance: "authorityFactoryCreateDiscoveredInstance",
-  AuthorityResolveEndpointsAsync: "authorityResolveEndpointsAsync",
-  AuthorityResolveEndpointsFromLocalSources: "authorityResolveEndpointsFromLocalSources",
-  AuthorityGetCloudDiscoveryMetadataFromNetwork: "authorityGetCloudDiscoveryMetadataFromNetwork",
-  AuthorityUpdateCloudDiscoveryMetadata: "authorityUpdateCloudDiscoveryMetadata",
-  AuthorityGetEndpointMetadataFromNetwork: "authorityGetEndpointMetadataFromNetwork",
-  AuthorityUpdateEndpointMetadata: "authorityUpdateEndpointMetadata",
-  AuthorityUpdateMetadataWithRegionalInformation: "authorityUpdateMetadataWithRegionalInformation",
-  /**
-   * Region Discovery functions
-   */
-  RegionDiscoveryDetectRegion: "regionDiscoveryDetectRegion",
-  RegionDiscoveryGetRegionFromIMDS: "regionDiscoveryGetRegionFromIMDS",
-  RegionDiscoveryGetCurrentVersion: "regionDiscoveryGetCurrentVersion",
-  AcquireTokenByCodeAsync: "acquireTokenByCodeAsync",
-  GetEndpointMetadataFromNetwork: "getEndpointMetadataFromNetwork",
-  GetCloudDiscoveryMetadataFromNetworkMeasurement: "getCloudDiscoveryMetadataFromNetworkMeasurement",
-  HandleRedirectPromiseMeasurement: "handleRedirectPromise",
-  HandleNativeRedirectPromiseMeasurement: "handleNativeRedirectPromise",
-  UpdateCloudDiscoveryMetadataMeasurement: "updateCloudDiscoveryMetadataMeasurement",
-  UsernamePasswordClientAcquireToken: "usernamePasswordClientAcquireToken",
-  NativeMessageHandlerHandshake: "nativeMessageHandlerHandshake",
-  NativeGenerateAuthResult: "nativeGenerateAuthResult",
-  RemoveHiddenIframe: "removeHiddenIframe",
-  /**
-   * Cache operations
-   */
-  ClearTokensAndKeysWithClaims: "clearTokensAndKeysWithClaims",
-  CacheManagerGetRefreshToken: "cacheManagerGetRefreshToken",
-  ImportExistingCache: "importExistingCache",
-  SetUserData: "setUserData",
-  LocalStorageUpdated: "localStorageUpdated",
-  /**
-   * Crypto Operations
-   */
-  GeneratePkceCodes: "generatePkceCodes",
-  GenerateCodeVerifier: "generateCodeVerifier",
-  GenerateCodeChallengeFromVerifier: "generateCodeChallengeFromVerifier",
-  Sha256Digest: "sha256Digest",
-  GetRandomValues: "getRandomValues",
-  GenerateHKDF: "generateHKDF",
-  GenerateBaseKey: "generateBaseKey",
-  Base64Decode: "base64Decode",
-  UrlEncodeArr: "urlEncodeArr",
-  Encrypt: "encrypt",
-  Decrypt: "decrypt",
-  GenerateEarKey: "generateEarKey",
-  DecryptEarResponse: "decryptEarResponse"
+// node_modules/@azure/msal-common/dist/authority/AuthorityType.mjs
+var AuthorityType = {
+  Default: 0,
+  Adfs: 1,
+  Dsts: 2,
+  Ciam: 3
 };
-var PerformanceEventAbbreviations = /* @__PURE__ */ new Map([
-  [PerformanceEvents.AcquireTokenByCode, "ATByCode"],
-  [PerformanceEvents.AcquireTokenByRefreshToken, "ATByRT"],
-  [PerformanceEvents.AcquireTokenSilent, "ATS"],
-  [PerformanceEvents.AcquireTokenSilentAsync, "ATSAsync"],
-  [PerformanceEvents.AcquireTokenPopup, "ATPopup"],
-  [PerformanceEvents.AcquireTokenRedirect, "ATRedirect"],
-  [
-    PerformanceEvents.CryptoOptsGetPublicKeyThumbprint,
-    "CryptoGetPKThumb"
-  ],
-  [PerformanceEvents.CryptoOptsSignJwt, "CryptoSignJwt"],
-  [PerformanceEvents.SilentCacheClientAcquireToken, "SltCacheClientAT"],
-  [PerformanceEvents.SilentIframeClientAcquireToken, "SltIframeClientAT"],
-  [PerformanceEvents.SilentRefreshClientAcquireToken, "SltRClientAT"],
-  [PerformanceEvents.SsoSilent, "SsoSlt"],
-  [
-    PerformanceEvents.StandardInteractionClientGetDiscoveredAuthority,
-    "StdIntClientGetDiscAuth"
-  ],
-  [
-    PerformanceEvents.FetchAccountIdWithNativeBroker,
-    "FetchAccIdWithNtvBroker"
-  ],
-  [
-    PerformanceEvents.NativeInteractionClientAcquireToken,
-    "NtvIntClientAT"
-  ],
-  [
-    PerformanceEvents.BaseClientCreateTokenRequestHeaders,
-    "BaseClientCreateTReqHead"
-  ],
-  [
-    PerformanceEvents.NetworkClientSendPostRequestAsync,
-    "NetClientSendPost"
-  ],
-  [
-    PerformanceEvents.RefreshTokenClientExecutePostToTokenEndpoint,
-    "RTClientExecPost"
-  ],
-  [
-    PerformanceEvents.AuthorizationCodeClientExecutePostToTokenEndpoint,
-    "AuthCodeClientExecPost"
-  ],
-  [PerformanceEvents.BrokerHandhshake, "BrokerHandshake"],
-  [
-    PerformanceEvents.AcquireTokenByRefreshTokenInBroker,
-    "ATByRTInBroker"
-  ],
-  [PerformanceEvents.AcquireTokenByBroker, "ATByBroker"],
-  [
-    PerformanceEvents.RefreshTokenClientExecuteTokenRequest,
-    "RTClientExecTReq"
-  ],
-  [PerformanceEvents.RefreshTokenClientAcquireToken, "RTClientAT"],
-  [
-    PerformanceEvents.RefreshTokenClientAcquireTokenWithCachedRefreshToken,
-    "RTClientATWithCachedRT"
-  ],
-  [
-    PerformanceEvents.RefreshTokenClientAcquireTokenByRefreshToken,
-    "RTClientATByRT"
-  ],
-  [
-    PerformanceEvents.RefreshTokenClientCreateTokenRequestBody,
-    "RTClientCreateTReqBody"
-  ],
-  [PerformanceEvents.AcquireTokenFromCache, "ATFromCache"],
-  [
-    PerformanceEvents.SilentFlowClientAcquireCachedToken,
-    "SltFlowClientATCached"
-  ],
-  [
-    PerformanceEvents.SilentFlowClientGenerateResultFromCacheRecord,
-    "SltFlowClientGenResFromCache"
-  ],
-  [PerformanceEvents.AcquireTokenBySilentIframe, "ATBySltIframe"],
-  [PerformanceEvents.InitializeBaseRequest, "InitBaseReq"],
-  [PerformanceEvents.InitializeSilentRequest, "InitSltReq"],
-  [
-    PerformanceEvents.InitializeClientApplication,
-    "InitClientApplication"
-  ],
-  [PerformanceEvents.InitializeCache, "InitCache"],
-  [PerformanceEvents.ImportExistingCache, "importCache"],
-  [PerformanceEvents.SetUserData, "setUserData"],
-  [PerformanceEvents.LocalStorageUpdated, "localStorageUpdated"],
-  [PerformanceEvents.SilentIframeClientTokenHelper, "SIClientTHelper"],
-  [
-    PerformanceEvents.SilentHandlerInitiateAuthRequest,
-    "SHandlerInitAuthReq"
-  ],
-  [
-    PerformanceEvents.SilentHandlerMonitorIframeForHash,
-    "SltHandlerMonitorIframeForHash"
-  ],
-  [PerformanceEvents.SilentHandlerLoadFrame, "SHandlerLoadFrame"],
-  [PerformanceEvents.SilentHandlerLoadFrameSync, "SHandlerLoadFrameSync"],
-  [
-    PerformanceEvents.StandardInteractionClientCreateAuthCodeClient,
-    "StdIntClientCreateAuthCodeClient"
-  ],
-  [
-    PerformanceEvents.StandardInteractionClientGetClientConfiguration,
-    "StdIntClientGetClientConf"
-  ],
-  [
-    PerformanceEvents.StandardInteractionClientInitializeAuthorizationRequest,
-    "StdIntClientInitAuthReq"
-  ],
-  [PerformanceEvents.GetAuthCodeUrl, "GetAuthCodeUrl"],
-  [
-    PerformanceEvents.HandleCodeResponseFromServer,
-    "HandleCodeResFromServer"
-  ],
-  [PerformanceEvents.HandleCodeResponse, "HandleCodeResp"],
-  [PerformanceEvents.HandleResponseEar, "HandleRespEar"],
-  [PerformanceEvents.HandleResponseCode, "HandleRespCode"],
-  [
-    PerformanceEvents.HandleResponsePlatformBroker,
-    "HandleRespPlatBroker"
-  ],
-  [PerformanceEvents.UpdateTokenEndpointAuthority, "UpdTEndpointAuth"],
-  [PerformanceEvents.AuthClientAcquireToken, "AuthClientAT"],
-  [PerformanceEvents.AuthClientExecuteTokenRequest, "AuthClientExecTReq"],
-  [
-    PerformanceEvents.AuthClientCreateTokenRequestBody,
-    "AuthClientCreateTReqBody"
-  ],
-  [PerformanceEvents.PopTokenGenerateCnf, "PopTGenCnf"],
-  [PerformanceEvents.PopTokenGenerateKid, "PopTGenKid"],
-  [PerformanceEvents.HandleServerTokenResponse, "HandleServerTRes"],
-  [PerformanceEvents.DeserializeResponse, "DeserializeRes"],
-  [
-    PerformanceEvents.AuthorityFactoryCreateDiscoveredInstance,
-    "AuthFactCreateDiscInst"
-  ],
-  [
-    PerformanceEvents.AuthorityResolveEndpointsAsync,
-    "AuthResolveEndpointsAsync"
-  ],
-  [
-    PerformanceEvents.AuthorityResolveEndpointsFromLocalSources,
-    "AuthResolveEndpointsFromLocal"
-  ],
-  [
-    PerformanceEvents.AuthorityGetCloudDiscoveryMetadataFromNetwork,
-    "AuthGetCDMetaFromNet"
-  ],
-  [
-    PerformanceEvents.AuthorityUpdateCloudDiscoveryMetadata,
-    "AuthUpdCDMeta"
-  ],
-  [
-    PerformanceEvents.AuthorityGetEndpointMetadataFromNetwork,
-    "AuthUpdCDMetaFromNet"
-  ],
-  [
-    PerformanceEvents.AuthorityUpdateEndpointMetadata,
-    "AuthUpdEndpointMeta"
-  ],
-  [
-    PerformanceEvents.AuthorityUpdateMetadataWithRegionalInformation,
-    "AuthUpdMetaWithRegInfo"
-  ],
-  [PerformanceEvents.RegionDiscoveryDetectRegion, "RegDiscDetectReg"],
-  [
-    PerformanceEvents.RegionDiscoveryGetRegionFromIMDS,
-    "RegDiscGetRegFromIMDS"
-  ],
-  [
-    PerformanceEvents.RegionDiscoveryGetCurrentVersion,
-    "RegDiscGetCurrentVer"
-  ],
-  [PerformanceEvents.AcquireTokenByCodeAsync, "ATByCodeAsync"],
-  [
-    PerformanceEvents.GetEndpointMetadataFromNetwork,
-    "GetEndpointMetaFromNet"
-  ],
-  [
-    PerformanceEvents.GetCloudDiscoveryMetadataFromNetworkMeasurement,
-    "GetCDMetaFromNet"
-  ],
-  [
-    PerformanceEvents.HandleRedirectPromiseMeasurement,
-    "HandleRedirectPromise"
-  ],
-  [
-    PerformanceEvents.HandleNativeRedirectPromiseMeasurement,
-    "HandleNtvRedirectPromise"
-  ],
-  [
-    PerformanceEvents.UpdateCloudDiscoveryMetadataMeasurement,
-    "UpdateCDMeta"
-  ],
-  [
-    PerformanceEvents.UsernamePasswordClientAcquireToken,
-    "UserPassClientAT"
-  ],
-  [
-    PerformanceEvents.NativeMessageHandlerHandshake,
-    "NtvMsgHandlerHandshake"
-  ],
-  [PerformanceEvents.NativeGenerateAuthResult, "NtvGenAuthRes"],
-  [PerformanceEvents.RemoveHiddenIframe, "RemoveHiddenIframe"],
-  [
-    PerformanceEvents.ClearTokensAndKeysWithClaims,
-    "ClearTAndKeysWithClaims"
-  ],
-  [PerformanceEvents.CacheManagerGetRefreshToken, "CacheManagerGetRT"],
-  [PerformanceEvents.GeneratePkceCodes, "GenPkceCodes"],
-  [PerformanceEvents.GenerateCodeVerifier, "GenCodeVerifier"],
-  [
-    PerformanceEvents.GenerateCodeChallengeFromVerifier,
-    "GenCodeChallengeFromVerifier"
-  ],
-  [PerformanceEvents.Sha256Digest, "Sha256Digest"],
-  [PerformanceEvents.GetRandomValues, "GetRandomValues"],
-  [PerformanceEvents.GenerateHKDF, "genHKDF"],
-  [PerformanceEvents.GenerateBaseKey, "genBaseKey"],
-  [PerformanceEvents.Base64Decode, "b64Decode"],
-  [PerformanceEvents.UrlEncodeArr, "urlEncArr"],
-  [PerformanceEvents.Encrypt, "encrypt"],
-  [PerformanceEvents.Decrypt, "decrypt"],
-  [PerformanceEvents.GenerateEarKey, "genEarKey"],
-  [PerformanceEvents.DecryptEarResponse, "decryptEarResp"]
-]);
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/FunctionWrappers.mjs
+// node_modules/@azure/msal-common/dist/account/TokenClaims.mjs
+function getTenantIdFromIdTokenClaims(idTokenClaims) {
+  if (idTokenClaims) {
+    const tenantId = idTokenClaims.tid || idTokenClaims.tfp || idTokenClaims.acr;
+    return tenantId || null;
+  }
+  return null;
+}
+
+// node_modules/@azure/msal-common/dist/authority/ProtocolMode.mjs
+var ProtocolMode = {
+  /**
+   * Auth Code + PKCE with Entra ID (formerly AAD) specific optimizations and features
+   */
+  AAD: "AAD",
+  /**
+   * Auth Code + PKCE without Entra ID specific optimizations and features. For use only with non-Microsoft owned authorities.
+   * Support is limited for this mode.
+   */
+  OIDC: "OIDC",
+  /**
+   * Encrypted Authorize Response (EAR) with Entra ID specific optimizations and features
+   */
+  EAR: "EAR"
+};
+
+// node_modules/@azure/msal-common/dist/cache/utils/AccountEntityUtils.mjs
+function generateAccountId(accountEntity) {
+  const accountId = [
+    accountEntity.homeAccountId,
+    accountEntity.environment
+  ];
+  return accountId.join(CACHE_KEY_SEPARATOR).toLowerCase();
+}
+function getAccountInfo(accountEntity) {
+  const tenantProfiles = accountEntity.tenantProfiles || [];
+  if (tenantProfiles.length === 0 && accountEntity.realm && accountEntity.localAccountId) {
+    tenantProfiles.push(buildTenantProfile(accountEntity.homeAccountId, accountEntity.localAccountId, accountEntity.realm));
+  }
+  return {
+    homeAccountId: accountEntity.homeAccountId,
+    environment: accountEntity.environment,
+    tenantId: accountEntity.realm,
+    username: accountEntity.username,
+    localAccountId: accountEntity.localAccountId,
+    loginHint: accountEntity.loginHint,
+    name: accountEntity.name,
+    nativeAccountId: accountEntity.nativeAccountId,
+    authorityType: accountEntity.authorityType,
+    // Deserialize tenant profiles array into a Map
+    tenantProfiles: new Map(tenantProfiles.map((tenantProfile) => {
+      return [tenantProfile.tenantId, tenantProfile];
+    })),
+    dataBoundary: accountEntity.dataBoundary
+  };
+}
+function isSingleTenant(accountEntity) {
+  return !accountEntity.tenantProfiles;
+}
+function createAccountEntity(accountDetails, authority, base64Decode) {
+  let authorityType;
+  if (authority.authorityType === AuthorityType.Adfs) {
+    authorityType = CACHE_ACCOUNT_TYPE_ADFS;
+  } else if (authority.protocolMode === ProtocolMode.OIDC) {
+    authorityType = CACHE_ACCOUNT_TYPE_GENERIC;
+  } else {
+    authorityType = CACHE_ACCOUNT_TYPE_MSSTS;
+  }
+  let clientInfo;
+  let dataBoundary;
+  if (accountDetails.clientInfo && base64Decode) {
+    clientInfo = buildClientInfo(accountDetails.clientInfo, base64Decode);
+    if (clientInfo.xms_tdbr) {
+      dataBoundary = clientInfo.xms_tdbr === "EU" ? "EU" : "None";
+    }
+  }
+  const env = accountDetails.environment || authority && authority.getPreferredCache();
+  if (!env) {
+    throw createClientAuthError(invalidCacheEnvironment);
+  }
+  const preferredUsername = accountDetails.idTokenClaims?.preferred_username || accountDetails.idTokenClaims?.upn;
+  const email = accountDetails.idTokenClaims?.emails ? accountDetails.idTokenClaims.emails[0] : null;
+  const username = preferredUsername || email || "";
+  const loginHint = accountDetails.idTokenClaims?.login_hint;
+  const realm = clientInfo?.utid || getTenantIdFromIdTokenClaims(accountDetails.idTokenClaims) || "";
+  const localAccountId = clientInfo?.uid || accountDetails.idTokenClaims?.oid || accountDetails.idTokenClaims?.sub || "";
+  let tenantProfiles;
+  if (accountDetails.tenantProfiles) {
+    tenantProfiles = accountDetails.tenantProfiles;
+  } else {
+    const tenantProfile = buildTenantProfile(accountDetails.homeAccountId, localAccountId, realm, accountDetails.idTokenClaims);
+    tenantProfiles = [tenantProfile];
+  }
+  return {
+    homeAccountId: accountDetails.homeAccountId,
+    environment: env,
+    realm,
+    localAccountId,
+    username,
+    authorityType,
+    loginHint,
+    clientInfo: accountDetails.clientInfo,
+    name: accountDetails.idTokenClaims?.name || "",
+    lastModificationTime: void 0,
+    lastModificationApp: void 0,
+    cloudGraphHostName: accountDetails.cloudGraphHostName,
+    msGraphHost: accountDetails.msGraphHost,
+    nativeAccountId: accountDetails.nativeAccountId,
+    tenantProfiles,
+    dataBoundary
+  };
+}
+function createAccountEntityFromAccountInfo(accountInfo, cloudGraphHostName, msGraphHost) {
+  const tenantProfiles = Array.from(accountInfo.tenantProfiles?.values() || []);
+  if (tenantProfiles.length === 0 && accountInfo.tenantId && accountInfo.localAccountId) {
+    tenantProfiles.push(buildTenantProfile(accountInfo.homeAccountId, accountInfo.localAccountId, accountInfo.tenantId, accountInfo.idTokenClaims));
+  }
+  return {
+    authorityType: accountInfo.authorityType || CACHE_ACCOUNT_TYPE_GENERIC,
+    homeAccountId: accountInfo.homeAccountId,
+    localAccountId: accountInfo.localAccountId,
+    nativeAccountId: accountInfo.nativeAccountId,
+    realm: accountInfo.tenantId,
+    environment: accountInfo.environment,
+    username: accountInfo.username,
+    loginHint: accountInfo.loginHint,
+    name: accountInfo.name,
+    cloudGraphHostName,
+    msGraphHost,
+    tenantProfiles,
+    dataBoundary: accountInfo.dataBoundary
+  };
+}
+function generateHomeAccountId(serverClientInfo, authType, logger31, cryptoObj, correlationId, idTokenClaims) {
+  if (!(authType === AuthorityType.Adfs || authType === AuthorityType.Dsts)) {
+    if (serverClientInfo) {
+      try {
+        const clientInfo = buildClientInfo(serverClientInfo, cryptoObj.base64Decode);
+        if (clientInfo.uid && clientInfo.utid) {
+          return `${clientInfo.uid}.${clientInfo.utid}`;
+        }
+      } catch (e) {
+      }
+    }
+    logger31.warning("No client info in response", correlationId);
+  }
+  return idTokenClaims?.sub || "";
+}
+function isAccountEntity(entity) {
+  if (!entity) {
+    return false;
+  }
+  return entity.hasOwnProperty("homeAccountId") && entity.hasOwnProperty("environment") && entity.hasOwnProperty("realm") && entity.hasOwnProperty("localAccountId") && entity.hasOwnProperty("username") && entity.hasOwnProperty("authorityType");
+}
+
+// node_modules/@azure/msal-common/dist/cache/CacheManager.mjs
+var CacheManager = class {
+  constructor(clientId, cryptoImpl, logger31, performanceClient, staticAuthorityOptions) {
+    this.clientId = clientId;
+    this.cryptoImpl = cryptoImpl;
+    this.commonLogger = logger31.clone(name, version);
+    this.staticAuthorityOptions = staticAuthorityOptions;
+    this.performanceClient = performanceClient;
+  }
+  /**
+   * Returns all the accounts in the cache that match the optional filter. If no filter is provided, all accounts are returned.
+   * @param accountFilter - (Optional) filter to narrow down the accounts returned
+   * @returns Array of AccountInfo objects in cache
+   */
+  getAllAccounts(accountFilter = {}, correlationId) {
+    return this.buildTenantProfiles(this.getAccountsFilteredBy(accountFilter, correlationId), correlationId, accountFilter);
+  }
+  /**
+   * Gets first tenanted AccountInfo object found based on provided filters
+   */
+  getAccountInfoFilteredBy(accountFilter, correlationId) {
+    if (Object.keys(accountFilter).length === 0 || Object.values(accountFilter).every((value) => value === null || value === void 0 || value === "")) {
+      this.commonLogger.warning("getAccountInfoFilteredBy: Account filter is empty or invalid, returning null", correlationId);
+      return null;
+    }
+    const allAccounts = this.getAllAccounts(accountFilter, correlationId);
+    if (allAccounts.length > 1) {
+      const sortedAccounts = allAccounts.sort((account) => {
+        return account.idTokenClaims ? -1 : 1;
+      });
+      return sortedAccounts[0];
+    } else if (allAccounts.length === 1) {
+      return allAccounts[0];
+    } else {
+      return null;
+    }
+  }
+  /**
+   * Returns a single matching
+   * @param accountFilter
+   * @returns
+   */
+  getBaseAccountInfo(accountFilter, correlationId) {
+    const accountEntities = this.getAccountsFilteredBy(accountFilter, correlationId);
+    if (accountEntities.length > 0) {
+      return getAccountInfo(accountEntities[0]);
+    } else {
+      return null;
+    }
+  }
+  /**
+   * Matches filtered account entities with cached ID tokens that match the tenant profile-specific account filters
+   * and builds the account info objects from the matching ID token's claims
+   * @param cachedAccounts
+   * @param accountFilter
+   * @returns Array of AccountInfo objects that match account and tenant profile filters
+   */
+  buildTenantProfiles(cachedAccounts, correlationId, accountFilter) {
+    return cachedAccounts.flatMap((accountEntity) => {
+      return this.getTenantProfilesFromAccountEntity(accountEntity, correlationId, accountFilter?.tenantId, accountFilter);
+    });
+  }
+  getTenantedAccountInfoByFilter(accountInfo, tokenKeys, tenantProfile, correlationId, tenantProfileFilter) {
+    let tenantedAccountInfo = null;
+    let idTokenClaims;
+    if (tenantProfileFilter) {
+      if (!this.tenantProfileMatchesFilter(tenantProfile, tenantProfileFilter)) {
+        return null;
+      }
+    }
+    const idToken = this.getIdToken(accountInfo, correlationId, tokenKeys, tenantProfile.tenantId);
+    if (idToken) {
+      idTokenClaims = extractTokenClaims(idToken.secret, this.cryptoImpl.base64Decode);
+      if (!this.idTokenClaimsMatchTenantProfileFilter(idTokenClaims, tenantProfileFilter)) {
+        return null;
+      }
+    }
+    tenantedAccountInfo = updateAccountTenantProfileData(accountInfo, tenantProfile, idTokenClaims, idToken?.secret);
+    return tenantedAccountInfo;
+  }
+  getTenantProfilesFromAccountEntity(accountEntity, correlationId, targetTenantId, tenantProfileFilter) {
+    const accountInfo = getAccountInfo(accountEntity);
+    let searchTenantProfiles = accountInfo.tenantProfiles || /* @__PURE__ */ new Map();
+    const tokenKeys = this.getTokenKeys();
+    if (targetTenantId) {
+      const tenantProfile = searchTenantProfiles.get(targetTenantId);
+      if (tenantProfile) {
+        searchTenantProfiles = /* @__PURE__ */ new Map([
+          [targetTenantId, tenantProfile]
+        ]);
+      } else {
+        return [];
+      }
+    }
+    const matchingTenantProfiles = [];
+    searchTenantProfiles.forEach((tenantProfile) => {
+      const tenantedAccountInfo = this.getTenantedAccountInfoByFilter(accountInfo, tokenKeys, tenantProfile, correlationId, tenantProfileFilter);
+      if (tenantedAccountInfo) {
+        matchingTenantProfiles.push(tenantedAccountInfo);
+      }
+    });
+    return matchingTenantProfiles;
+  }
+  tenantProfileMatchesFilter(tenantProfile, tenantProfileFilter) {
+    if (!!tenantProfileFilter.localAccountId && !this.matchLocalAccountIdFromTenantProfile(tenantProfile, tenantProfileFilter.localAccountId)) {
+      return false;
+    }
+    if (!!tenantProfileFilter.name && !(tenantProfile.name === tenantProfileFilter.name)) {
+      return false;
+    }
+    if (tenantProfileFilter.isHomeTenant !== void 0 && !(tenantProfile.isHomeTenant === tenantProfileFilter.isHomeTenant)) {
+      return false;
+    }
+    return true;
+  }
+  idTokenClaimsMatchTenantProfileFilter(idTokenClaims, tenantProfileFilter) {
+    if (tenantProfileFilter) {
+      if (!!tenantProfileFilter.localAccountId && !this.matchLocalAccountIdFromTokenClaims(idTokenClaims, tenantProfileFilter.localAccountId)) {
+        return false;
+      }
+      if (!!tenantProfileFilter.loginHint && !this.matchLoginHintFromTokenClaims(idTokenClaims, tenantProfileFilter.loginHint)) {
+        return false;
+      }
+      if (!!tenantProfileFilter.username && !this.matchUsername(idTokenClaims.preferred_username, tenantProfileFilter.username)) {
+        return false;
+      }
+      if (!!tenantProfileFilter.name && !this.matchName(idTokenClaims, tenantProfileFilter.name)) {
+        return false;
+      }
+      if (!!tenantProfileFilter.sid && !this.matchSid(idTokenClaims, tenantProfileFilter.sid)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  /**
+   * saves a cache record
+   * @param cacheRecord {CacheRecord}
+   * @param storeInCache {?StoreInCache}
+   * @param correlationId {?string} correlation id
+   */
+  async saveCacheRecord(cacheRecord, correlationId, kmsi, apiId, storeInCache) {
+    if (!cacheRecord) {
+      throw createClientAuthError(invalidCacheRecord);
+    }
+    try {
+      if (!!cacheRecord.account) {
+        await this.setAccount(cacheRecord.account, correlationId, kmsi, apiId);
+      }
+      if (!!cacheRecord.idToken && storeInCache?.idToken !== false) {
+        await this.setIdTokenCredential(cacheRecord.idToken, correlationId, kmsi);
+      }
+      if (!!cacheRecord.accessToken && storeInCache?.accessToken !== false) {
+        await this.saveAccessToken(cacheRecord.accessToken, correlationId, kmsi);
+      }
+      if (!!cacheRecord.refreshToken && storeInCache?.refreshToken !== false) {
+        await this.setRefreshTokenCredential(cacheRecord.refreshToken, correlationId, kmsi);
+      }
+      if (!!cacheRecord.appMetadata) {
+        this.setAppMetadata(cacheRecord.appMetadata, correlationId);
+      }
+    } catch (e) {
+      this.commonLogger?.error(`CacheManager.saveCacheRecord: failed`, correlationId);
+      if (e instanceof AuthError) {
+        throw e;
+      } else {
+        throw createCacheError(e);
+      }
+    }
+  }
+  /**
+   * saves access token credential
+   * @param credential
+   */
+  async saveAccessToken(credential, correlationId, kmsi) {
+    const accessTokenFilter = {
+      clientId: credential.clientId,
+      credentialType: credential.credentialType,
+      environment: credential.environment,
+      homeAccountId: credential.homeAccountId,
+      realm: credential.realm,
+      tokenType: credential.tokenType
+    };
+    const tokenKeys = this.getTokenKeys();
+    const currentScopes = ScopeSet.fromString(credential.target);
+    tokenKeys.accessToken.forEach((key) => {
+      if (!this.accessTokenKeyMatchesFilter(key, accessTokenFilter, false)) {
+        return;
+      }
+      const tokenEntity = this.getAccessTokenCredential(key, correlationId);
+      if (tokenEntity && this.credentialMatchesFilter(tokenEntity, accessTokenFilter, correlationId)) {
+        const tokenScopeSet = ScopeSet.fromString(tokenEntity.target);
+        if (tokenScopeSet.intersectingScopeSets(currentScopes)) {
+          this.removeAccessToken(key, correlationId);
+        }
+      }
+    });
+    await this.setAccessTokenCredential(credential, correlationId, kmsi);
+  }
+  /**
+   * Retrieve account entities matching all provided tenant-agnostic filters; if no filter is set, get all account entities in the cache
+   * Not checking for casing as keys are all generated in lower case, remember to convert to lower case if object properties are compared
+   * @param accountFilter - An object containing Account properties to filter by
+   */
+  getAccountsFilteredBy(accountFilter, correlationId) {
+    const allAccountKeys = this.getAccountKeys();
+    const matchingAccounts = [];
+    allAccountKeys.forEach((cacheKey) => {
+      const entity = this.getAccount(cacheKey, correlationId);
+      if (!entity) {
+        return;
+      }
+      if (!!accountFilter.homeAccountId && !this.matchHomeAccountId(entity, accountFilter.homeAccountId)) {
+        return;
+      }
+      if (!!accountFilter.username && !this.matchUsername(entity.username, accountFilter.username)) {
+        return;
+      }
+      if (!!accountFilter.environment && !this.matchEnvironment(entity, accountFilter.environment, correlationId)) {
+        return;
+      }
+      if (!!accountFilter.realm && !this.matchRealm(entity, accountFilter.realm)) {
+        return;
+      }
+      if (!!accountFilter.nativeAccountId && !this.matchNativeAccountId(entity, accountFilter.nativeAccountId)) {
+        return;
+      }
+      if (!!accountFilter.authorityType && !this.matchAuthorityType(entity, accountFilter.authorityType)) {
+        return;
+      }
+      const tenantProfileFilter = {
+        localAccountId: accountFilter?.localAccountId,
+        name: accountFilter?.name
+      };
+      const matchingTenantProfiles = entity.tenantProfiles?.filter((tenantProfile) => {
+        return this.tenantProfileMatchesFilter(tenantProfile, tenantProfileFilter);
+      });
+      if (matchingTenantProfiles && matchingTenantProfiles.length === 0) {
+        return;
+      }
+      matchingAccounts.push(entity);
+    });
+    return matchingAccounts;
+  }
+  /**
+   * Returns whether or not the given credential entity matches the filter
+   * @param entity
+   * @param filter
+   * @param correlationId
+   * @returns
+   */
+  credentialMatchesFilter(entity, filter, correlationId) {
+    if (!!filter.clientId && !this.matchClientId(entity, filter.clientId)) {
+      return false;
+    }
+    if (!!filter.userAssertionHash && !this.matchUserAssertionHash(entity, filter.userAssertionHash)) {
+      return false;
+    }
+    if (typeof filter.homeAccountId === "string" && !this.matchHomeAccountId(entity, filter.homeAccountId)) {
+      return false;
+    }
+    if (!!filter.environment && !this.matchEnvironment(entity, filter.environment, correlationId)) {
+      return false;
+    }
+    if (!!filter.realm && !this.matchRealm(entity, filter.realm)) {
+      return false;
+    }
+    if (!!filter.credentialType && !this.matchCredentialType(entity, filter.credentialType)) {
+      return false;
+    }
+    if (!!filter.familyId && !this.matchFamilyId(entity, filter.familyId)) {
+      return false;
+    }
+    if (!!filter.target && !this.matchTarget(entity, filter.target)) {
+      return false;
+    }
+    if (entity.credentialType === CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME) {
+      if (!!filter.tokenType && !this.matchTokenType(entity, filter.tokenType)) {
+        return false;
+      }
+      if (filter.tokenType === AuthenticationScheme.SSH) {
+        if (filter.keyId && !this.matchKeyId(entity, filter.keyId)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+  /**
+   * retrieve appMetadata matching all provided filters; if no filter is set, get all appMetadata
+   * @param filter
+   * @param correlationId
+   */
+  getAppMetadataFilteredBy(filter, correlationId) {
+    const allCacheKeys = this.getKeys();
+    const matchingAppMetadata = {};
+    allCacheKeys.forEach((cacheKey) => {
+      if (!this.isAppMetadata(cacheKey)) {
+        return;
+      }
+      const entity = this.getAppMetadata(cacheKey, correlationId);
+      if (!entity) {
+        return;
+      }
+      if (!!filter.environment && !this.matchEnvironment(entity, filter.environment, correlationId)) {
+        return;
+      }
+      if (!!filter.clientId && !this.matchClientId(entity, filter.clientId)) {
+        return;
+      }
+      matchingAppMetadata[cacheKey] = entity;
+    });
+    return matchingAppMetadata;
+  }
+  /**
+   * retrieve authorityMetadata that contains a matching alias
+   * @param host
+   * @param correlationId
+   */
+  getAuthorityMetadataByAlias(host, correlationId) {
+    const allCacheKeys = this.getAuthorityMetadataKeys();
+    let matchedEntity = null;
+    allCacheKeys.forEach((cacheKey) => {
+      if (!this.isAuthorityMetadata(cacheKey) || cacheKey.indexOf(this.clientId) === -1) {
+        return;
+      }
+      const entity = this.getAuthorityMetadata(cacheKey, correlationId);
+      if (!entity) {
+        return;
+      }
+      if (entity.aliases.indexOf(host) === -1) {
+        return;
+      }
+      matchedEntity = entity;
+    });
+    return matchedEntity;
+  }
+  /**
+   * Removes all accounts and related tokens from cache.
+   */
+  removeAllAccounts(correlationId) {
+    const accounts = this.getAllAccounts({}, correlationId);
+    accounts.forEach((account) => {
+      this.removeAccount(account, correlationId);
+    });
+  }
+  /**
+   * Removes the account and related tokens for a given account key
+   * @param account
+   */
+  removeAccount(account, correlationId) {
+    this.removeAccountContext(account, correlationId);
+    const accountKeys = this.getAccountKeys();
+    const keyFilter = (key) => {
+      return key.includes(account.homeAccountId) && key.includes(account.environment);
+    };
+    accountKeys.filter(keyFilter).forEach((key) => {
+      this.removeItem(key, correlationId);
+      this.performanceClient.incrementFields({ accountsRemoved: 1 }, correlationId);
+    });
+  }
+  /**
+   * Removes credentials associated with the provided account
+   * @param account
+   */
+  removeAccountContext(account, correlationId) {
+    const allTokenKeys = this.getTokenKeys();
+    const keyFilter = (key) => {
+      return key.includes(account.homeAccountId) && key.includes(account.environment);
+    };
+    allTokenKeys.idToken.filter(keyFilter).forEach((key) => {
+      this.removeIdToken(key, correlationId);
+    });
+    allTokenKeys.accessToken.filter(keyFilter).forEach((key) => {
+      this.removeAccessToken(key, correlationId);
+    });
+    allTokenKeys.refreshToken.filter(keyFilter).forEach((key) => {
+      this.removeRefreshToken(key, correlationId);
+    });
+  }
+  /**
+   * returns a boolean if the given credential is removed
+   * @param key
+   * @param correlationId
+   */
+  removeAccessToken(key, correlationId) {
+    const credential = this.getAccessTokenCredential(key, correlationId);
+    if (!credential) {
+      return;
+    }
+    this.removeItem(key, correlationId);
+    this.performanceClient.incrementFields({ accessTokensRemoved: 1 }, correlationId);
+    if (credential.credentialType.toLowerCase() === CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME.toLowerCase()) {
+      if (credential.tokenType === AuthenticationScheme.POP) {
+        const accessTokenWithAuthSchemeEntity = credential;
+        const kid = accessTokenWithAuthSchemeEntity.keyId;
+        if (kid) {
+          void this.cryptoImpl.removeTokenBindingKey(kid, correlationId).catch(() => {
+            this.commonLogger.error(`Failed to remove token binding key '${kid}'`, correlationId);
+            this.performanceClient?.incrementFields({ removeTokenBindingKeyFailure: 1 }, correlationId);
+          });
+        }
+      }
+    }
+  }
+  /**
+   * Removes all app metadata objects from cache.
+   */
+  removeAppMetadata(correlationId) {
+    const allCacheKeys = this.getKeys();
+    allCacheKeys.forEach((cacheKey) => {
+      if (this.isAppMetadata(cacheKey)) {
+        this.removeItem(cacheKey, correlationId);
+      }
+    });
+    return true;
+  }
+  /**
+   * Retrieve IdTokenEntity from cache
+   * @param account {AccountInfo}
+   * @param tokenKeys {?TokenKeys}
+   * @param targetRealm {?string}
+   * @param performanceClient {?IPerformanceClient}
+   * @param correlationId {?string}
+   */
+  getIdToken(account, correlationId, tokenKeys, targetRealm) {
+    this.commonLogger.trace("CacheManager - getIdToken called", correlationId);
+    const idTokenFilter = {
+      homeAccountId: account.homeAccountId,
+      environment: account.environment,
+      credentialType: CredentialType.ID_TOKEN,
+      clientId: this.clientId,
+      realm: targetRealm
+    };
+    const idTokenMap = this.getIdTokensByFilter(idTokenFilter, correlationId, tokenKeys);
+    const numIdTokens = idTokenMap.size;
+    if (numIdTokens < 1) {
+      this.commonLogger.info("CacheManager:getIdToken - No token found", correlationId);
+      return null;
+    } else if (numIdTokens > 1) {
+      let tokensToBeRemoved = idTokenMap;
+      if (!targetRealm) {
+        const homeIdTokenMap = /* @__PURE__ */ new Map();
+        idTokenMap.forEach((idToken, key) => {
+          if (idToken.realm === account.tenantId) {
+            homeIdTokenMap.set(key, idToken);
+          }
+        });
+        const numHomeIdTokens = homeIdTokenMap.size;
+        if (numHomeIdTokens < 1) {
+          this.commonLogger.info("CacheManager:getIdToken - Multiple ID tokens found for account but none match account entity tenant id, returning first result", correlationId);
+          return idTokenMap.values().next().value;
+        } else if (numHomeIdTokens === 1) {
+          this.commonLogger.info("CacheManager:getIdToken - Multiple ID tokens found for account, defaulting to home tenant profile", correlationId);
+          return homeIdTokenMap.values().next().value;
+        } else {
+          tokensToBeRemoved = homeIdTokenMap;
+        }
+      }
+      this.commonLogger.info("CacheManager:getIdToken - Multiple matching ID tokens found, clearing them", correlationId);
+      tokensToBeRemoved.forEach((idToken, key) => {
+        this.removeIdToken(key, correlationId);
+      });
+      this.performanceClient.addFields({ multiMatchedID: idTokenMap.size }, correlationId);
+      return null;
+    }
+    this.commonLogger.info("CacheManager:getIdToken - Returning ID token", correlationId);
+    return idTokenMap.values().next().value;
+  }
+  /**
+   * Gets all idTokens matching the given filter
+   * @param filter
+   * @returns
+   */
+  getIdTokensByFilter(filter, correlationId, tokenKeys) {
+    const idTokenKeys = tokenKeys && tokenKeys.idToken || this.getTokenKeys().idToken;
+    const idTokens = /* @__PURE__ */ new Map();
+    idTokenKeys.forEach((key) => {
+      if (!this.idTokenKeyMatchesFilter(key, {
+        clientId: this.clientId,
+        ...filter
+      })) {
+        return;
+      }
+      const idToken = this.getIdTokenCredential(key, correlationId);
+      if (idToken && this.credentialMatchesFilter(idToken, filter, correlationId)) {
+        idTokens.set(key, idToken);
+      }
+    });
+    return idTokens;
+  }
+  /**
+   * Validate the cache key against filter before retrieving and parsing cache value
+   * @param key
+   * @param filter
+   * @returns
+   */
+  idTokenKeyMatchesFilter(inputKey, filter) {
+    const key = inputKey.toLowerCase();
+    if (filter.clientId && key.indexOf(filter.clientId.toLowerCase()) === -1) {
+      return false;
+    }
+    if (filter.homeAccountId && key.indexOf(filter.homeAccountId.toLowerCase()) === -1) {
+      return false;
+    }
+    return true;
+  }
+  /**
+   * Removes idToken from the cache
+   * @param key
+   */
+  removeIdToken(key, correlationId) {
+    this.removeItem(key, correlationId);
+  }
+  /**
+   * Removes refresh token from the cache
+   * @param key
+   */
+  removeRefreshToken(key, correlationId) {
+    this.removeItem(key, correlationId);
+  }
+  /**
+   * Retrieve AccessTokenEntity from cache
+   * @param account {AccountInfo}
+   * @param request {BaseAuthRequest}
+   * @param tokenKeys {?TokenKeys}
+   * @param performanceClient {?IPerformanceClient}
+   */
+  getAccessToken(account, request5, tokenKeys, targetRealm) {
+    const correlationId = request5.correlationId;
+    this.commonLogger.trace("CacheManager - getAccessToken called", correlationId);
+    const scopes = ScopeSet.createSearchScopes(request5.scopes);
+    const authScheme = request5.authenticationScheme || AuthenticationScheme.BEARER;
+    const credentialType = authScheme && authScheme.toLowerCase() !== AuthenticationScheme.BEARER.toLowerCase() ? CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME : CredentialType.ACCESS_TOKEN;
+    const accessTokenFilter = {
+      homeAccountId: account.homeAccountId,
+      environment: account.environment,
+      credentialType,
+      clientId: this.clientId,
+      realm: targetRealm || account.tenantId,
+      target: scopes,
+      tokenType: authScheme,
+      keyId: request5.sshKid
+    };
+    const accessTokenKeys = tokenKeys && tokenKeys.accessToken || this.getTokenKeys().accessToken;
+    const accessTokens = [];
+    accessTokenKeys.forEach((key) => {
+      if (this.accessTokenKeyMatchesFilter(key, accessTokenFilter, true)) {
+        const accessToken = this.getAccessTokenCredential(key, correlationId);
+        if (accessToken && this.credentialMatchesFilter(accessToken, accessTokenFilter, correlationId)) {
+          accessTokens.push(accessToken);
+        }
+      }
+    });
+    const numAccessTokens = accessTokens.length;
+    if (numAccessTokens < 1) {
+      this.commonLogger.info("CacheManager:getAccessToken - No token found", correlationId);
+      return null;
+    } else if (numAccessTokens > 1) {
+      this.commonLogger.info("CacheManager:getAccessToken - Multiple access tokens found, clearing them", correlationId);
+      accessTokens.forEach((accessToken) => {
+        this.removeAccessToken(this.generateCredentialKey(accessToken), correlationId);
+      });
+      this.performanceClient.addFields({ multiMatchedAT: accessTokens.length }, correlationId);
+      return null;
+    }
+    this.commonLogger.info("CacheManager:getAccessToken - Returning access token", correlationId);
+    return accessTokens[0];
+  }
+  /**
+   * Validate the cache key against filter before retrieving and parsing cache value
+   * @param key
+   * @param filter
+   * @param keyMustContainAllScopes
+   * @returns
+   */
+  accessTokenKeyMatchesFilter(inputKey, filter, keyMustContainAllScopes) {
+    const key = inputKey.toLowerCase();
+    if (filter.clientId && key.indexOf(filter.clientId.toLowerCase()) === -1) {
+      return false;
+    }
+    if (filter.homeAccountId && key.indexOf(filter.homeAccountId.toLowerCase()) === -1) {
+      return false;
+    }
+    if (filter.realm && key.indexOf(filter.realm.toLowerCase()) === -1) {
+      return false;
+    }
+    if (filter.target) {
+      const scopes = filter.target.asArray();
+      for (let i = 0; i < scopes.length; i++) {
+        if (keyMustContainAllScopes && !key.includes(scopes[i].toLowerCase())) {
+          return false;
+        } else if (!keyMustContainAllScopes && key.includes(scopes[i].toLowerCase())) {
+          return true;
+        }
+      }
+    }
+    return true;
+  }
+  /**
+   * Gets all access tokens matching the filter
+   * @param filter
+   * @returns
+   */
+  getAccessTokensByFilter(filter, correlationId) {
+    const tokenKeys = this.getTokenKeys();
+    const accessTokens = [];
+    tokenKeys.accessToken.forEach((key) => {
+      if (!this.accessTokenKeyMatchesFilter(key, filter, true)) {
+        return;
+      }
+      const accessToken = this.getAccessTokenCredential(key, correlationId);
+      if (accessToken && this.credentialMatchesFilter(accessToken, filter, correlationId)) {
+        accessTokens.push(accessToken);
+      }
+    });
+    return accessTokens;
+  }
+  /**
+   * Helper to retrieve the appropriate refresh token from cache
+   * @param account {AccountInfo}
+   * @param familyRT {boolean}
+   * @param tokenKeys {?TokenKeys}
+   * @param performanceClient {?IPerformanceClient}
+   * @param correlationId {?string}
+   */
+  getRefreshToken(account, familyRT, correlationId, tokenKeys) {
+    this.commonLogger.trace("CacheManager - getRefreshToken called", correlationId);
+    const id = familyRT ? THE_FAMILY_ID : void 0;
+    const refreshTokenFilter = {
+      homeAccountId: account.homeAccountId,
+      environment: account.environment,
+      credentialType: CredentialType.REFRESH_TOKEN,
+      clientId: this.clientId,
+      familyId: id
+    };
+    const refreshTokenKeys = tokenKeys && tokenKeys.refreshToken || this.getTokenKeys().refreshToken;
+    const refreshTokens = [];
+    refreshTokenKeys.forEach((key) => {
+      if (this.refreshTokenKeyMatchesFilter(key, refreshTokenFilter)) {
+        const refreshToken = this.getRefreshTokenCredential(key, correlationId);
+        if (refreshToken && this.credentialMatchesFilter(refreshToken, refreshTokenFilter, correlationId)) {
+          refreshTokens.push(refreshToken);
+        }
+      }
+    });
+    const numRefreshTokens = refreshTokens.length;
+    if (numRefreshTokens < 1) {
+      this.commonLogger.info("CacheManager:getRefreshToken - No refresh token found.", correlationId);
+      return null;
+    }
+    if (numRefreshTokens > 1) {
+      this.performanceClient.addFields({ multiMatchedRT: numRefreshTokens }, correlationId);
+    }
+    this.commonLogger.info("CacheManager:getRefreshToken - returning refresh token", correlationId);
+    return refreshTokens[0];
+  }
+  /**
+   * Validate the cache key against filter before retrieving and parsing cache value
+   * @param key
+   * @param filter
+   */
+  refreshTokenKeyMatchesFilter(inputKey, filter) {
+    const key = inputKey.toLowerCase();
+    if (filter.familyId && key.indexOf(filter.familyId.toLowerCase()) === -1) {
+      return false;
+    }
+    if (!filter.familyId && filter.clientId && key.indexOf(filter.clientId.toLowerCase()) === -1) {
+      return false;
+    }
+    if (filter.homeAccountId && key.indexOf(filter.homeAccountId.toLowerCase()) === -1) {
+      return false;
+    }
+    return true;
+  }
+  /**
+   * Retrieve AppMetadataEntity from cache
+   */
+  readAppMetadataFromCache(environment, correlationId) {
+    const appMetadataFilter = {
+      environment,
+      clientId: this.clientId
+    };
+    const appMetadata = this.getAppMetadataFilteredBy(appMetadataFilter, correlationId);
+    const appMetadataEntries = Object.keys(appMetadata).map((key) => appMetadata[key]);
+    const numAppMetadata = appMetadataEntries.length;
+    if (numAppMetadata < 1) {
+      return null;
+    } else if (numAppMetadata > 1) {
+      throw createClientAuthError(multipleMatchingAppMetadata);
+    }
+    return appMetadataEntries[0];
+  }
+  /**
+   * Return the family_id value associated  with FOCI
+   * @param environment
+   * @param clientId
+   */
+  isAppMetadataFOCI(environment, correlationId) {
+    const appMetadata = this.readAppMetadataFromCache(environment, correlationId);
+    return !!(appMetadata && appMetadata.familyId === THE_FAMILY_ID);
+  }
+  /**
+   * helper to match account ids
+   * @param value
+   * @param homeAccountId
+   */
+  matchHomeAccountId(entity, homeAccountId) {
+    return !!(typeof entity.homeAccountId === "string" && homeAccountId === entity.homeAccountId);
+  }
+  /**
+   * helper to match account ids
+   * @param entity
+   * @param localAccountId
+   * @returns
+   */
+  matchLocalAccountIdFromTokenClaims(tokenClaims, localAccountId) {
+    const idTokenLocalAccountId = tokenClaims.oid || tokenClaims.sub;
+    return localAccountId === idTokenLocalAccountId;
+  }
+  matchLocalAccountIdFromTenantProfile(tenantProfile, localAccountId) {
+    return tenantProfile.localAccountId === localAccountId;
+  }
+  /**
+   * helper to match names
+   * @param entity
+   * @param name
+   * @returns true if the downcased name properties are present and match in the filter and the entity
+   */
+  matchName(claims, name3) {
+    return !!(name3.toLowerCase() === claims.name?.toLowerCase());
+  }
+  /**
+   * helper to match usernames
+   * @param entity
+   * @param username
+   * @returns
+   */
+  matchUsername(cachedUsername, filterUsername) {
+    return !!(cachedUsername && typeof cachedUsername === "string" && filterUsername?.toLowerCase() === cachedUsername.toLowerCase());
+  }
+  /**
+   * helper to match assertion
+   * @param value
+   * @param oboAssertion
+   */
+  matchUserAssertionHash(entity, userAssertionHash) {
+    return !!(entity.userAssertionHash && userAssertionHash === entity.userAssertionHash);
+  }
+  /**
+   * helper to match environment
+   * @param value
+   * @param environment
+   */
+  matchEnvironment(entity, environment, correlationId) {
+    if (this.staticAuthorityOptions) {
+      const staticAliases = getAliasesFromStaticSources(this.staticAuthorityOptions, this.commonLogger, correlationId);
+      if (staticAliases.includes(environment) && staticAliases.includes(entity.environment)) {
+        return true;
+      }
+    }
+    const cloudMetadata = this.getAuthorityMetadataByAlias(environment, correlationId);
+    if (cloudMetadata && cloudMetadata.aliases.indexOf(entity.environment) > -1) {
+      return true;
+    }
+    return false;
+  }
+  /**
+   * helper to match credential type
+   * @param entity
+   * @param credentialType
+   */
+  matchCredentialType(entity, credentialType) {
+    return entity.credentialType && credentialType.toLowerCase() === entity.credentialType.toLowerCase();
+  }
+  /**
+   * helper to match client ids
+   * @param entity
+   * @param clientId
+   */
+  matchClientId(entity, clientId) {
+    return !!(entity.clientId && clientId === entity.clientId);
+  }
+  /**
+   * helper to match family ids
+   * @param entity
+   * @param familyId
+   */
+  matchFamilyId(entity, familyId) {
+    return !!(entity.familyId && familyId === entity.familyId);
+  }
+  /**
+   * helper to match realm
+   * @param entity
+   * @param realm
+   */
+  matchRealm(entity, realm) {
+    return !!(entity.realm?.toLowerCase() === realm.toLowerCase());
+  }
+  /**
+   * helper to match nativeAccountId
+   * @param entity
+   * @param nativeAccountId
+   * @returns boolean indicating the match result
+   */
+  matchNativeAccountId(entity, nativeAccountId) {
+    return !!(entity.nativeAccountId && nativeAccountId === entity.nativeAccountId);
+  }
+  /**
+   * helper to match loginHint which can be either:
+   * 1. login_hint ID token claim
+   * 2. username in cached account object
+   * 3. upn in ID token claims
+   * @param entity
+   * @param loginHint
+   * @returns
+   */
+  matchLoginHintFromTokenClaims(tokenClaims, loginHint) {
+    if (tokenClaims.login_hint === loginHint) {
+      return true;
+    }
+    if (tokenClaims.preferred_username === loginHint) {
+      return true;
+    }
+    if (tokenClaims.upn === loginHint) {
+      return true;
+    }
+    return false;
+  }
+  /**
+   * Helper to match sid
+   * @param entity
+   * @param sid
+   * @returns true if the sid claim is present and matches the filter
+   */
+  matchSid(idTokenClaims, sid) {
+    return idTokenClaims.sid === sid;
+  }
+  matchAuthorityType(entity, authorityType) {
+    return !!(entity.authorityType && authorityType.toLowerCase() === entity.authorityType.toLowerCase());
+  }
+  /**
+   * Returns true if the target scopes are a subset of the current entity's scopes, false otherwise.
+   * @param entity
+   * @param target
+   */
+  matchTarget(entity, target) {
+    const isNotAccessTokenCredential = entity.credentialType !== CredentialType.ACCESS_TOKEN && entity.credentialType !== CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME;
+    if (isNotAccessTokenCredential || !entity.target) {
+      return false;
+    }
+    const entityScopeSet = ScopeSet.fromString(entity.target);
+    return entityScopeSet.containsScopeSet(target);
+  }
+  /**
+   * Returns true if the credential's tokenType or Authentication Scheme matches the one in the request, false otherwise
+   * @param entity
+   * @param tokenType
+   */
+  matchTokenType(entity, tokenType) {
+    return !!(entity.tokenType && entity.tokenType === tokenType);
+  }
+  /**
+   * Returns true if the credential's keyId matches the one in the request, false otherwise
+   * @param entity
+   * @param keyId
+   */
+  matchKeyId(entity, keyId) {
+    return !!(entity.keyId && entity.keyId === keyId);
+  }
+  /**
+   * returns if a given cache entity is of the type appmetadata
+   * @param key
+   */
+  isAppMetadata(key) {
+    return key.indexOf(APP_METADATA) !== -1;
+  }
+  /**
+   * returns if a given cache entity is of the type authoritymetadata
+   * @param key
+   */
+  isAuthorityMetadata(key) {
+    return key.indexOf(AUTHORITY_METADATA_CACHE_KEY) !== -1;
+  }
+  /**
+   * returns cache key used for cloud instance metadata
+   */
+  generateAuthorityMetadataCacheKey(authority) {
+    return `${AUTHORITY_METADATA_CACHE_KEY}-${this.clientId}-${authority}`;
+  }
+  /**
+   * Helper to convert serialized data to object
+   * @param obj
+   * @param json
+   */
+  static toObject(obj, json) {
+    for (const propertyName in json) {
+      obj[propertyName] = json[propertyName];
+    }
+    return obj;
+  }
+};
+var DefaultStorageClass = class extends CacheManager {
+  async setAccount() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getAccount() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  async setIdTokenCredential() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getIdTokenCredential() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  async setAccessTokenCredential() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getAccessTokenCredential() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  async setRefreshTokenCredential() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getRefreshTokenCredential() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  setAppMetadata() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getAppMetadata() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  setServerTelemetry() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getServerTelemetry() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  setAuthorityMetadata() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getAuthorityMetadata() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getAuthorityMetadataKeys() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  setThrottlingCache() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getThrottlingCache() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  removeItem() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getKeys() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getAccountKeys() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  getTokenKeys() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  generateCredentialKey() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+  generateAccountKey() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+};
+
+// node_modules/@azure/msal-common/dist/telemetry/performance/PerformanceEvent.mjs
+var PerformanceEventStatus = {
+  NotStarted: 0,
+  InProgress: 1,
+  Completed: 2
+};
+
+// node_modules/@azure/msal-common/dist/telemetry/performance/StubPerformanceClient.mjs
+var StubPerformanceClient = class {
+  generateId() {
+    return "callback-id";
+  }
+  startMeasurement(measureName, correlationId) {
+    return {
+      end: () => null,
+      discard: () => {
+      },
+      add: () => {
+      },
+      increment: () => {
+      },
+      event: {
+        eventId: this.generateId(),
+        status: PerformanceEventStatus.InProgress,
+        authority: "",
+        libraryName: "",
+        libraryVersion: "",
+        clientId: "",
+        name: measureName,
+        startTimeMs: Date.now(),
+        correlationId: correlationId || ""
+      }
+    };
+  }
+  endMeasurement() {
+    return null;
+  }
+  discardMeasurements() {
+    return;
+  }
+  removePerformanceCallback() {
+    return true;
+  }
+  addPerformanceCallback() {
+    return "";
+  }
+  emitEvents() {
+    return;
+  }
+  addFields() {
+    return;
+  }
+  incrementFields() {
+    return;
+  }
+  cacheEventByCorrelationId() {
+    return;
+  }
+};
+
+// node_modules/@azure/msal-common/dist/config/ClientConfiguration.mjs
+var DEFAULT_SYSTEM_OPTIONS = {
+  tokenRenewalOffsetSeconds: DEFAULT_TOKEN_RENEWAL_OFFSET_SEC,
+  preventCorsPreflight: false
+};
+var DEFAULT_LOGGER_IMPLEMENTATION = {
+  loggerCallback: () => {
+  },
+  piiLoggingEnabled: false,
+  logLevel: LogLevel.Info,
+  correlationId: ""
+};
+var DEFAULT_NETWORK_IMPLEMENTATION = {
+  async sendGetRequestAsync() {
+    throw createClientAuthError(methodNotImplemented);
+  },
+  async sendPostRequestAsync() {
+    throw createClientAuthError(methodNotImplemented);
+  }
+};
+var DEFAULT_LIBRARY_INFO = {
+  sku: SKU,
+  version,
+  cpu: "",
+  os: ""
+};
+var DEFAULT_CLIENT_CREDENTIALS = {
+  clientSecret: "",
+  clientAssertion: void 0
+};
+var DEFAULT_AZURE_CLOUD_OPTIONS = {
+  azureCloudInstance: AzureCloudInstance.None,
+  tenant: `${DEFAULT_COMMON_TENANT}`
+};
+var DEFAULT_TELEMETRY_OPTIONS = {
+  application: {
+    appName: "",
+    appVersion: ""
+  }
+};
+function buildClientConfiguration({ authOptions: userAuthOptions, systemOptions: userSystemOptions, loggerOptions: userLoggerOption, storageInterface: storageImplementation, networkInterface: networkImplementation, cryptoInterface: cryptoImplementation, clientCredentials, libraryInfo, telemetry, serverTelemetryManager, persistencePlugin, serializableCache }) {
+  const loggerOptions = {
+    ...DEFAULT_LOGGER_IMPLEMENTATION,
+    ...userLoggerOption
+  };
+  return {
+    authOptions: buildAuthOptions(userAuthOptions),
+    systemOptions: { ...DEFAULT_SYSTEM_OPTIONS, ...userSystemOptions },
+    loggerOptions,
+    storageInterface: storageImplementation || new DefaultStorageClass(userAuthOptions.clientId, DEFAULT_CRYPTO_IMPLEMENTATION, new Logger(loggerOptions), new StubPerformanceClient()),
+    networkInterface: networkImplementation || DEFAULT_NETWORK_IMPLEMENTATION,
+    cryptoInterface: cryptoImplementation || DEFAULT_CRYPTO_IMPLEMENTATION,
+    clientCredentials: clientCredentials || DEFAULT_CLIENT_CREDENTIALS,
+    libraryInfo: { ...DEFAULT_LIBRARY_INFO, ...libraryInfo },
+    telemetry: { ...DEFAULT_TELEMETRY_OPTIONS, ...telemetry },
+    serverTelemetryManager: serverTelemetryManager || null,
+    persistencePlugin: persistencePlugin || null,
+    serializableCache: serializableCache || null
+  };
+}
+function buildAuthOptions(authOptions) {
+  return {
+    clientCapabilities: [],
+    azureCloudOptions: DEFAULT_AZURE_CLOUD_OPTIONS,
+    instanceAware: false,
+    isMcp: false,
+    ...authOptions
+  };
+}
+function isOidcProtocolMode(config) {
+  return config.authOptions.authority.options.protocolMode === ProtocolMode.OIDC;
+}
+
+// node_modules/@azure/msal-common/dist/error/ServerError.mjs
+var ServerError = class _ServerError extends AuthError {
+  constructor(errorCode, errorMessage, subError, errorNo, status) {
+    super(errorCode, errorMessage, subError);
+    this.name = "ServerError";
+    this.errorNo = errorNo;
+    this.status = status;
+    Object.setPrototypeOf(this, _ServerError.prototype);
+  }
+};
+
+// node_modules/@azure/msal-common/dist/error/InteractionRequiredAuthErrorCodes.mjs
+var InteractionRequiredAuthErrorCodes_exports = {};
+__export(InteractionRequiredAuthErrorCodes_exports, {
+  badToken: () => badToken,
+  consentRequired: () => consentRequired,
+  interactionRequired: () => interactionRequired,
+  interruptedUser: () => interruptedUser,
+  loginRequired: () => loginRequired,
+  nativeAccountUnavailable: () => nativeAccountUnavailable,
+  noTokensFound: () => noTokensFound,
+  refreshTokenExpired: () => refreshTokenExpired,
+  uxNotAllowed: () => uxNotAllowed
+});
+var noTokensFound = "no_tokens_found";
+var nativeAccountUnavailable = "native_account_unavailable";
+var refreshTokenExpired = "refresh_token_expired";
+var uxNotAllowed = "ux_not_allowed";
+var interactionRequired = "interaction_required";
+var consentRequired = "consent_required";
+var loginRequired = "login_required";
+var badToken = "bad_token";
+var interruptedUser = "interrupted_user";
+
+// node_modules/@azure/msal-common/dist/error/InteractionRequiredAuthError.mjs
+var InteractionRequiredServerErrorMessage = [
+  interactionRequired,
+  consentRequired,
+  loginRequired,
+  badToken,
+  uxNotAllowed,
+  interruptedUser
+];
+var InteractionRequiredAuthSubErrorMessage = [
+  "message_only",
+  "additional_action",
+  "basic_action",
+  "user_password_expired",
+  "consent_required",
+  "bad_token",
+  "ux_not_allowed",
+  "interrupted_user"
+];
+var InteractionRequiredAuthError = class _InteractionRequiredAuthError extends AuthError {
+  constructor(errorCode, errorMessage, subError, timestamp, traceId, correlationId, claims, errorNo) {
+    super(errorCode, errorMessage, subError);
+    Object.setPrototypeOf(this, _InteractionRequiredAuthError.prototype);
+    this.timestamp = timestamp || "";
+    this.traceId = traceId || "";
+    this.correlationId = correlationId || "";
+    this.claims = claims || "";
+    this.name = "InteractionRequiredAuthError";
+    this.errorNo = errorNo;
+  }
+};
+function isInteractionRequiredError(errorCode, errorString, subError) {
+  const isInteractionRequiredErrorCode = !!errorCode && InteractionRequiredServerErrorMessage.indexOf(errorCode) > -1;
+  const isInteractionRequiredSubError = !!subError && InteractionRequiredAuthSubErrorMessage.indexOf(subError) > -1;
+  const isInteractionRequiredErrorDesc = !!errorString && InteractionRequiredServerErrorMessage.some((irErrorCode) => {
+    return errorString.indexOf(irErrorCode) > -1;
+  });
+  return isInteractionRequiredErrorCode || isInteractionRequiredErrorDesc || isInteractionRequiredSubError;
+}
+function createInteractionRequiredAuthError(errorCode, errorMessage) {
+  return new InteractionRequiredAuthError(errorCode, errorMessage);
+}
+
+// node_modules/@azure/msal-common/dist/utils/ProtocolUtils.mjs
+function parseRequestState(base64Decode, state3) {
+  if (!base64Decode) {
+    throw createClientAuthError(noCryptoObject);
+  }
+  if (!state3) {
+    throw createClientAuthError(invalidState);
+  }
+  try {
+    const splitState = state3.split(RESOURCE_DELIM);
+    const libraryState = splitState[0];
+    const userState = splitState.length > 1 ? splitState.slice(1).join(RESOURCE_DELIM) : "";
+    const libraryStateString = base64Decode(libraryState);
+    const libraryStateObj = JSON.parse(libraryStateString);
+    return {
+      userRequestState: userState || "",
+      libraryState: libraryStateObj
+    };
+  } catch (e) {
+    throw createClientAuthError(invalidState);
+  }
+}
+
+// node_modules/@azure/msal-common/dist/utils/TimeUtils.mjs
+var TimeUtils_exports = {};
+__export(TimeUtils_exports, {
+  delay: () => delay,
+  isCacheExpired: () => isCacheExpired,
+  isTokenExpired: () => isTokenExpired,
+  nowSeconds: () => nowSeconds,
+  toDateFromSeconds: () => toDateFromSeconds,
+  toSecondsFromDate: () => toSecondsFromDate,
+  wasClockTurnedBack: () => wasClockTurnedBack
+});
+function nowSeconds() {
+  return Math.round((/* @__PURE__ */ new Date()).getTime() / 1e3);
+}
+function toSecondsFromDate(date) {
+  return date.getTime() / 1e3;
+}
+function toDateFromSeconds(seconds) {
+  if (seconds) {
+    return new Date(Number(seconds) * 1e3);
+  }
+  return /* @__PURE__ */ new Date();
+}
+function isTokenExpired(expiresOn, offset) {
+  const expirationSec = Number(expiresOn) || 0;
+  const offsetCurrentTimeSec = nowSeconds() + offset;
+  return offsetCurrentTimeSec > expirationSec;
+}
+function isCacheExpired(lastUpdatedAt, cacheRetentionDays) {
+  const cacheExpirationTimestamp = Number(lastUpdatedAt) + cacheRetentionDays * 24 * 60 * 60 * 1e3;
+  return Date.now() > cacheExpirationTimestamp;
+}
+function wasClockTurnedBack(cachedAt) {
+  const cachedAtSec = Number(cachedAt);
+  return cachedAtSec > nowSeconds();
+}
+function delay(t, value) {
+  return new Promise((resolve) => setTimeout(() => resolve(value), t));
+}
+
+// node_modules/@azure/msal-common/dist/telemetry/performance/PerformanceEvents.mjs
+var NetworkClientSendPostRequestAsync = "networkClientSendPostRequestAsync";
+var RefreshTokenClientExecutePostToTokenEndpoint = "refreshTokenClientExecutePostToTokenEndpoint";
+var AuthorizationCodeClientExecutePostToTokenEndpoint = "authorizationCodeClientExecutePostToTokenEndpoint";
+var RefreshTokenClientExecuteTokenRequest = "refreshTokenClientExecuteTokenRequest";
+var RefreshTokenClientAcquireToken = "refreshTokenClientAcquireToken";
+var RefreshTokenClientAcquireTokenWithCachedRefreshToken = "refreshTokenClientAcquireTokenWithCachedRefreshToken";
+var RefreshTokenClientCreateTokenRequestBody = "refreshTokenClientCreateTokenRequestBody";
+var SilentFlowClientGenerateResultFromCacheRecord = "silentFlowClientGenerateResultFromCacheRecord";
+var AuthClientExecuteTokenRequest = "authClientExecuteTokenRequest";
+var AuthClientCreateTokenRequestBody = "authClientCreateTokenRequestBody";
+var UpdateTokenEndpointAuthority = "updateTokenEndpointAuthority";
+var PopTokenGenerateCnf = "popTokenGenerateCnf";
+var HandleServerTokenResponse = "handleServerTokenResponse";
+var AuthorityResolveEndpointsAsync = "authorityResolveEndpointsAsync";
+var AuthorityGetCloudDiscoveryMetadataFromNetwork = "authorityGetCloudDiscoveryMetadataFromNetwork";
+var AuthorityUpdateCloudDiscoveryMetadata = "authorityUpdateCloudDiscoveryMetadata";
+var AuthorityGetEndpointMetadataFromNetwork = "authorityGetEndpointMetadataFromNetwork";
+var AuthorityUpdateEndpointMetadata = "authorityUpdateEndpointMetadata";
+var AuthorityUpdateMetadataWithRegionalInformation = "authorityUpdateMetadataWithRegionalInformation";
+var RegionDiscoveryDetectRegion = "regionDiscoveryDetectRegion";
+var RegionDiscoveryGetRegionFromIMDS = "regionDiscoveryGetRegionFromIMDS";
+var RegionDiscoveryGetCurrentVersion = "regionDiscoveryGetCurrentVersion";
+var CacheManagerGetRefreshToken = "cacheManagerGetRefreshToken";
+
+// node_modules/@azure/msal-common/dist/utils/FunctionWrappers.mjs
 var invoke = (callback, eventName, logger31, telemetryClient, correlationId) => {
   return (...args) => {
-    logger31.trace(`Executing function ${eventName}`);
-    const inProgressEvent = telemetryClient?.startMeasurement(eventName, correlationId);
+    logger31.trace(`Executing function '${eventName}'`, correlationId);
+    const inProgressEvent = telemetryClient.startMeasurement(eventName, correlationId);
     if (correlationId) {
-      const eventCount = eventName + "CallCount";
-      telemetryClient?.incrementFields({ [eventCount]: 1 }, correlationId);
+      telemetryClient.incrementFields({ [`ext.${eventName}CallCount`]: 1 }, correlationId);
     }
     try {
       const result = callback(...args);
-      inProgressEvent?.end({
+      inProgressEvent.end({
         success: true
       });
-      logger31.trace(`Returning result from ${eventName}`);
+      logger31.trace(`Returning result from '${eventName}'`, correlationId);
       return result;
     } catch (e) {
-      logger31.trace(`Error occurred in ${eventName}`);
+      logger31.trace(`Error occurred in '${eventName}'`, correlationId);
       try {
-        logger31.trace(JSON.stringify(e));
+        logger31.trace(JSON.stringify(e), correlationId);
       } catch (e2) {
-        logger31.trace("Unable to print error message.");
+        logger31.trace("Unable to print error message.", correlationId);
       }
-      inProgressEvent?.end({
+      inProgressEvent.end({
         success: false
       }, e);
       throw e;
@@ -35101,27 +35410,25 @@ var invoke = (callback, eventName, logger31, telemetryClient, correlationId) => 
 };
 var invokeAsync = (callback, eventName, logger31, telemetryClient, correlationId) => {
   return (...args) => {
-    logger31.trace(`Executing function ${eventName}`);
-    const inProgressEvent = telemetryClient?.startMeasurement(eventName, correlationId);
+    logger31.trace(`Executing function '${eventName}'`, correlationId);
+    const inProgressEvent = telemetryClient.startMeasurement(eventName, correlationId);
     if (correlationId) {
-      const eventCount = eventName + "CallCount";
-      telemetryClient?.incrementFields({ [eventCount]: 1 }, correlationId);
+      telemetryClient.incrementFields({ [`ext.${eventName}CallCount`]: 1 }, correlationId);
     }
-    telemetryClient?.setPreQueueTime(eventName, correlationId);
     return callback(...args).then((response) => {
-      logger31.trace(`Returning result from ${eventName}`);
-      inProgressEvent?.end({
+      logger31.trace(`Returning result from '${eventName}'`, correlationId);
+      inProgressEvent.end({
         success: true
       });
       return response;
     }).catch((e) => {
-      logger31.trace(`Error occurred in ${eventName}`);
+      logger31.trace(`Error occurred in '${eventName}'`, correlationId);
       try {
-        logger31.trace(JSON.stringify(e));
+        logger31.trace(JSON.stringify(e), correlationId);
       } catch (e2) {
-        logger31.trace("Unable to print error message.");
+        logger31.trace("Unable to print error message.", correlationId);
       }
-      inProgressEvent?.end({
+      inProgressEvent.end({
         success: false
       }, e);
       throw e;
@@ -35129,7 +35436,776 @@ var invokeAsync = (callback, eventName, logger31, telemetryClient, correlationId
   };
 };
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/RegionDiscovery.mjs
+// node_modules/@azure/msal-common/dist/crypto/PopTokenGenerator.mjs
+var KeyLocation = {
+  SW: "sw"
+};
+var PopTokenGenerator = class {
+  constructor(cryptoUtils, performanceClient) {
+    this.cryptoUtils = cryptoUtils;
+    this.performanceClient = performanceClient;
+  }
+  /**
+   * Generates the req_cnf validated at the RP in the POP protocol for SHR parameters
+   * and returns an object containing the keyid, the full req_cnf string and the req_cnf string hash
+   * @param request
+   * @returns
+   */
+  async generateCnf(request5, logger31) {
+    const reqCnf = await invokeAsync(this.generateKid.bind(this), PopTokenGenerateCnf, logger31, this.performanceClient, request5.correlationId)(request5);
+    const reqCnfString = this.cryptoUtils.base64UrlEncode(JSON.stringify(reqCnf));
+    return {
+      kid: reqCnf.kid,
+      reqCnfString
+    };
+  }
+  /**
+   * Generates key_id for a SHR token request
+   * @param request
+   * @returns
+   */
+  async generateKid(request5) {
+    const kidThumbprint = await this.cryptoUtils.getPublicKeyThumbprint(request5);
+    return {
+      kid: kidThumbprint,
+      xms_ksl: KeyLocation.SW
+    };
+  }
+  /**
+   * Signs the POP access_token with the local generated key-pair
+   * @param accessToken
+   * @param request
+   * @returns
+   */
+  async signPopToken(accessToken, keyId, request5) {
+    return this.signPayload(accessToken, keyId, request5);
+  }
+  /**
+   * Utility function to generate the signed JWT for an access_token
+   * @param payload
+   * @param kid
+   * @param request
+   * @param claims
+   * @returns
+   */
+  async signPayload(payload, keyId, request5, claims) {
+    const { resourceRequestMethod, resourceRequestUri, shrClaims, shrNonce, shrOptions } = request5;
+    const resourceUrlString = resourceRequestUri ? new UrlString(resourceRequestUri) : void 0;
+    const resourceUrlComponents = resourceUrlString?.getUrlComponents();
+    return this.cryptoUtils.signJwt({
+      at: payload,
+      ts: nowSeconds(),
+      m: resourceRequestMethod?.toUpperCase(),
+      u: resourceUrlComponents?.HostNameAndPort,
+      nonce: shrNonce || this.cryptoUtils.createNewGuid(),
+      p: resourceUrlComponents?.AbsolutePath,
+      q: resourceUrlComponents?.QueryString ? [[], resourceUrlComponents.QueryString] : void 0,
+      client_claims: shrClaims || void 0,
+      ...claims
+    }, keyId, shrOptions, request5.correlationId);
+  }
+};
+
+// node_modules/@azure/msal-common/dist/cache/persistence/TokenCacheContext.mjs
+var TokenCacheContext = class {
+  constructor(tokenCache, hasChanged) {
+    this.cache = tokenCache;
+    this.hasChanged = hasChanged;
+  }
+  /**
+   * boolean which indicates the changes in cache
+   */
+  get cacheHasChanged() {
+    return this.hasChanged;
+  }
+  /**
+   * function to retrieve the token cache
+   */
+  get tokenCache() {
+    return this.cache;
+  }
+};
+
+// node_modules/@azure/msal-common/dist/cache/utils/CacheHelpers.mjs
+var CacheHelpers_exports = {};
+__export(CacheHelpers_exports, {
+  createAccessTokenEntity: () => createAccessTokenEntity,
+  createIdTokenEntity: () => createIdTokenEntity,
+  createRefreshTokenEntity: () => createRefreshTokenEntity,
+  generateAppMetadataKey: () => generateAppMetadataKey,
+  generateAuthorityMetadataExpiresAt: () => generateAuthorityMetadataExpiresAt,
+  isAccessTokenEntity: () => isAccessTokenEntity,
+  isAppMetadataEntity: () => isAppMetadataEntity,
+  isAuthorityMetadataEntity: () => isAuthorityMetadataEntity,
+  isAuthorityMetadataExpired: () => isAuthorityMetadataExpired,
+  isCredentialEntity: () => isCredentialEntity,
+  isIdTokenEntity: () => isIdTokenEntity,
+  isRefreshTokenEntity: () => isRefreshTokenEntity,
+  isServerTelemetryEntity: () => isServerTelemetryEntity,
+  isThrottlingEntity: () => isThrottlingEntity,
+  updateAuthorityEndpointMetadata: () => updateAuthorityEndpointMetadata,
+  updateCloudDiscoveryMetadata: () => updateCloudDiscoveryMetadata
+});
+function createIdTokenEntity(homeAccountId, environment, idToken, clientId, tenantId) {
+  const idTokenEntity = {
+    credentialType: CredentialType.ID_TOKEN,
+    homeAccountId,
+    environment,
+    clientId,
+    secret: idToken,
+    realm: tenantId,
+    lastUpdatedAt: Date.now().toString()
+    // Set the last updated time to now
+  };
+  return idTokenEntity;
+}
+function createAccessTokenEntity(homeAccountId, environment, accessToken, clientId, tenantId, scopes, expiresOn, extExpiresOn, base64Decode, refreshOn, tokenType, userAssertionHash, keyId) {
+  const atEntity = {
+    homeAccountId,
+    credentialType: CredentialType.ACCESS_TOKEN,
+    secret: accessToken,
+    cachedAt: nowSeconds().toString(),
+    expiresOn: expiresOn.toString(),
+    extendedExpiresOn: extExpiresOn.toString(),
+    environment,
+    clientId,
+    realm: tenantId,
+    target: scopes,
+    tokenType: tokenType || AuthenticationScheme.BEARER,
+    lastUpdatedAt: Date.now().toString()
+    // Set the last updated time to now
+  };
+  if (userAssertionHash) {
+    atEntity.userAssertionHash = userAssertionHash;
+  }
+  if (refreshOn) {
+    atEntity.refreshOn = refreshOn.toString();
+  }
+  if (atEntity.tokenType?.toLowerCase() !== AuthenticationScheme.BEARER.toLowerCase()) {
+    atEntity.credentialType = CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME;
+    switch (atEntity.tokenType) {
+      case AuthenticationScheme.POP:
+        const tokenClaims = extractTokenClaims(accessToken, base64Decode);
+        if (!tokenClaims?.cnf?.kid) {
+          throw createClientAuthError(tokenClaimsCnfRequiredForSignedJwt);
+        }
+        atEntity.keyId = tokenClaims.cnf.kid;
+        break;
+      case AuthenticationScheme.SSH:
+        atEntity.keyId = keyId;
+    }
+  }
+  return atEntity;
+}
+function createRefreshTokenEntity(homeAccountId, environment, refreshToken, clientId, familyId, userAssertionHash, expiresOn) {
+  const rtEntity = {
+    credentialType: CredentialType.REFRESH_TOKEN,
+    homeAccountId,
+    environment,
+    clientId,
+    secret: refreshToken,
+    lastUpdatedAt: Date.now().toString()
+  };
+  if (userAssertionHash) {
+    rtEntity.userAssertionHash = userAssertionHash;
+  }
+  if (familyId) {
+    rtEntity.familyId = familyId;
+  }
+  if (expiresOn) {
+    rtEntity.expiresOn = expiresOn.toString();
+  }
+  return rtEntity;
+}
+function isCredentialEntity(entity) {
+  return entity.hasOwnProperty("homeAccountId") && entity.hasOwnProperty("environment") && entity.hasOwnProperty("credentialType") && entity.hasOwnProperty("clientId") && entity.hasOwnProperty("secret");
+}
+function isAccessTokenEntity(entity) {
+  if (!entity) {
+    return false;
+  }
+  return isCredentialEntity(entity) && entity.hasOwnProperty("realm") && entity.hasOwnProperty("target") && (entity["credentialType"] === CredentialType.ACCESS_TOKEN || entity["credentialType"] === CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME);
+}
+function isIdTokenEntity(entity) {
+  if (!entity) {
+    return false;
+  }
+  return isCredentialEntity(entity) && entity.hasOwnProperty("realm") && entity["credentialType"] === CredentialType.ID_TOKEN;
+}
+function isRefreshTokenEntity(entity) {
+  if (!entity) {
+    return false;
+  }
+  return isCredentialEntity(entity) && entity["credentialType"] === CredentialType.REFRESH_TOKEN;
+}
+function isServerTelemetryEntity(key, entity) {
+  const validateKey = key.indexOf(SERVER_TELEM_CACHE_KEY) === 0;
+  let validateEntity = true;
+  if (entity) {
+    validateEntity = entity.hasOwnProperty("failedRequests") && entity.hasOwnProperty("errors") && entity.hasOwnProperty("cacheHits");
+  }
+  return validateKey && validateEntity;
+}
+function isThrottlingEntity(key, entity) {
+  let validateKey = false;
+  if (key) {
+    validateKey = key.indexOf(THROTTLING_PREFIX) === 0;
+  }
+  let validateEntity = true;
+  if (entity) {
+    validateEntity = entity.hasOwnProperty("throttleTime");
+  }
+  return validateKey && validateEntity;
+}
+function generateAppMetadataKey({ environment, clientId }) {
+  const appMetaDataKeyArray = [
+    APP_METADATA,
+    environment,
+    clientId
+  ];
+  return appMetaDataKeyArray.join(CACHE_KEY_SEPARATOR).toLowerCase();
+}
+function isAppMetadataEntity(key, entity) {
+  if (!entity) {
+    return false;
+  }
+  return key.indexOf(APP_METADATA) === 0 && entity.hasOwnProperty("clientId") && entity.hasOwnProperty("environment");
+}
+function isAuthorityMetadataEntity(key, entity) {
+  if (!entity) {
+    return false;
+  }
+  return key.indexOf(AUTHORITY_METADATA_CACHE_KEY) === 0 && entity.hasOwnProperty("aliases") && entity.hasOwnProperty("preferred_cache") && entity.hasOwnProperty("preferred_network") && entity.hasOwnProperty("canonical_authority") && entity.hasOwnProperty("authorization_endpoint") && entity.hasOwnProperty("token_endpoint") && entity.hasOwnProperty("issuer") && entity.hasOwnProperty("aliasesFromNetwork") && entity.hasOwnProperty("endpointsFromNetwork") && entity.hasOwnProperty("expiresAt") && entity.hasOwnProperty("jwks_uri");
+}
+function generateAuthorityMetadataExpiresAt() {
+  return nowSeconds() + AUTHORITY_METADATA_REFRESH_TIME_SECONDS;
+}
+function updateAuthorityEndpointMetadata(authorityMetadata, updatedValues, fromNetwork) {
+  authorityMetadata.authorization_endpoint = updatedValues.authorization_endpoint;
+  authorityMetadata.token_endpoint = updatedValues.token_endpoint;
+  authorityMetadata.end_session_endpoint = updatedValues.end_session_endpoint;
+  authorityMetadata.issuer = updatedValues.issuer;
+  authorityMetadata.endpointsFromNetwork = fromNetwork;
+  authorityMetadata.jwks_uri = updatedValues.jwks_uri;
+}
+function updateCloudDiscoveryMetadata(authorityMetadata, updatedValues, fromNetwork) {
+  authorityMetadata.aliases = updatedValues.aliases;
+  authorityMetadata.preferred_cache = updatedValues.preferred_cache;
+  authorityMetadata.preferred_network = updatedValues.preferred_network;
+  authorityMetadata.aliasesFromNetwork = fromNetwork;
+}
+function isAuthorityMetadataExpired(metadata) {
+  return metadata.expiresAt <= nowSeconds();
+}
+
+// node_modules/@azure/msal-common/dist/response/ResponseHandler.mjs
+var ResponseHandler = class _ResponseHandler {
+  constructor(clientId, cacheStorage, cryptoObj, logger31, performanceClient, serializableCache, persistencePlugin) {
+    this.clientId = clientId;
+    this.cacheStorage = cacheStorage;
+    this.cryptoObj = cryptoObj;
+    this.logger = logger31;
+    this.performanceClient = performanceClient;
+    this.serializableCache = serializableCache;
+    this.persistencePlugin = persistencePlugin;
+  }
+  /**
+   * Function which validates server authorization token response.
+   * @param serverResponse
+   * @param correlationId
+   * @param refreshAccessToken
+   */
+  validateTokenResponse(serverResponse, correlationId, refreshAccessToken) {
+    if (serverResponse.error || serverResponse.error_description || serverResponse.suberror) {
+      const errString = `Error(s): ${serverResponse.error_codes || NOT_AVAILABLE} - Timestamp: ${serverResponse.timestamp || NOT_AVAILABLE} - Description: ${serverResponse.error_description || NOT_AVAILABLE} - Correlation ID: ${serverResponse.correlation_id || NOT_AVAILABLE} - Trace ID: ${serverResponse.trace_id || NOT_AVAILABLE}`;
+      const serverErrorNo = serverResponse.error_codes?.length ? serverResponse.error_codes[0] : void 0;
+      const serverError = new ServerError(serverResponse.error, errString, serverResponse.suberror, serverErrorNo, serverResponse.status);
+      if (refreshAccessToken && serverResponse.status && serverResponse.status >= HTTP_SERVER_ERROR_RANGE_START && serverResponse.status <= HTTP_SERVER_ERROR_RANGE_END) {
+        this.logger.warning(`executeTokenRequest:validateTokenResponse - AAD is currently unavailable and the access token is unable to be refreshed.
+${serverError}`, correlationId);
+        return;
+      } else if (refreshAccessToken && serverResponse.status && serverResponse.status >= HTTP_CLIENT_ERROR_RANGE_START && serverResponse.status <= HTTP_CLIENT_ERROR_RANGE_END) {
+        this.logger.warning(`executeTokenRequest:validateTokenResponse - AAD is currently available but is unable to refresh the access token.
+${serverError}`, correlationId);
+        return;
+      }
+      if (isInteractionRequiredError(serverResponse.error, serverResponse.error_description, serverResponse.suberror)) {
+        throw new InteractionRequiredAuthError(serverResponse.error, serverResponse.error_description, serverResponse.suberror, serverResponse.timestamp || "", serverResponse.trace_id || "", serverResponse.correlation_id || "", serverResponse.claims || "", serverErrorNo);
+      }
+      throw serverError;
+    }
+  }
+  /**
+   * Returns a constructed token response based on given string. Also manages the cache updates and cleanups.
+   * @param serverTokenResponse
+   * @param authority
+   */
+  async handleServerTokenResponse(serverTokenResponse, authority, reqTimestamp, request5, apiId, authCodePayload, userAssertionHash, handlingRefreshTokenResponse, forceCacheRefreshTokenResponse, serverRequestId) {
+    let idTokenClaims;
+    if (serverTokenResponse.id_token) {
+      idTokenClaims = extractTokenClaims(serverTokenResponse.id_token || "", this.cryptoObj.base64Decode);
+      if (authCodePayload && authCodePayload.nonce) {
+        if (idTokenClaims.nonce !== authCodePayload.nonce) {
+          throw createClientAuthError(nonceMismatch);
+        }
+      }
+      if (request5.maxAge || request5.maxAge === 0) {
+        const authTime = idTokenClaims.auth_time;
+        if (!authTime) {
+          throw createClientAuthError(authTimeNotFound);
+        }
+        checkMaxAge(authTime, request5.maxAge);
+      }
+    }
+    this.homeAccountIdentifier = generateHomeAccountId(serverTokenResponse.client_info || "", authority.authorityType, this.logger, this.cryptoObj, request5.correlationId, idTokenClaims);
+    let requestStateObj;
+    if (!!authCodePayload && !!authCodePayload.state) {
+      requestStateObj = parseRequestState(this.cryptoObj.base64Decode, authCodePayload.state);
+    }
+    serverTokenResponse.key_id = serverTokenResponse.key_id || request5.sshKid || void 0;
+    const cacheRecord = this.generateCacheRecord(serverTokenResponse, authority, reqTimestamp, request5, idTokenClaims, userAssertionHash, authCodePayload);
+    let cacheContext;
+    try {
+      if (this.persistencePlugin && this.serializableCache) {
+        this.logger.verbose("Persistence enabled, calling beforeCacheAccess", request5.correlationId);
+        cacheContext = new TokenCacheContext(this.serializableCache, true);
+        await this.persistencePlugin.beforeCacheAccess(cacheContext);
+      }
+      if (handlingRefreshTokenResponse && !forceCacheRefreshTokenResponse && cacheRecord.account) {
+        const cachedAccounts = this.cacheStorage.getAllAccounts({
+          homeAccountId: cacheRecord.account.homeAccountId,
+          environment: cacheRecord.account.environment
+        }, request5.correlationId);
+        if (cachedAccounts.length < 1) {
+          this.logger.warning("Account used to refresh tokens not in persistence, refreshed tokens will not be stored in the cache", request5.correlationId);
+          this.performanceClient?.addFields({
+            acntLoggedOut: true
+          }, request5.correlationId);
+          return await _ResponseHandler.generateAuthenticationResult(this.cryptoObj, authority, cacheRecord, false, request5, this.performanceClient, idTokenClaims, requestStateObj, void 0, serverRequestId);
+        }
+      }
+      await this.cacheStorage.saveCacheRecord(cacheRecord, request5.correlationId, isKmsi(idTokenClaims || {}), apiId, request5.storeInCache);
+    } finally {
+      if (this.persistencePlugin && this.serializableCache && cacheContext) {
+        this.logger.verbose("Persistence enabled, calling afterCacheAccess", request5.correlationId);
+        await this.persistencePlugin.afterCacheAccess(cacheContext);
+      }
+    }
+    return _ResponseHandler.generateAuthenticationResult(this.cryptoObj, authority, cacheRecord, false, request5, this.performanceClient, idTokenClaims, requestStateObj, serverTokenResponse, serverRequestId);
+  }
+  /**
+   * Generates CacheRecord
+   * @param serverTokenResponse
+   * @param idTokenObj
+   * @param authority
+   */
+  generateCacheRecord(serverTokenResponse, authority, reqTimestamp, request5, idTokenClaims, userAssertionHash, authCodePayload) {
+    const env = authority.getPreferredCache();
+    if (!env) {
+      throw createClientAuthError(invalidCacheEnvironment);
+    }
+    const claimsTenantId = getTenantIdFromIdTokenClaims(idTokenClaims);
+    let cachedIdToken;
+    let cachedAccount;
+    if (serverTokenResponse.id_token && !!idTokenClaims) {
+      cachedIdToken = createIdTokenEntity(this.homeAccountIdentifier, env, serverTokenResponse.id_token, this.clientId, claimsTenantId || "");
+      cachedAccount = buildAccountToCache(
+        this.cacheStorage,
+        authority,
+        this.homeAccountIdentifier,
+        this.cryptoObj.base64Decode,
+        request5.correlationId,
+        idTokenClaims,
+        serverTokenResponse.client_info,
+        env,
+        claimsTenantId,
+        authCodePayload,
+        void 0,
+        // nativeAccountId
+        this.logger
+      );
+    }
+    let cachedAccessToken = null;
+    if (serverTokenResponse.access_token) {
+      const responseScopes = serverTokenResponse.scope ? ScopeSet.fromString(serverTokenResponse.scope) : new ScopeSet(request5.scopes || []);
+      const expiresIn = (typeof serverTokenResponse.expires_in === "string" ? parseInt(serverTokenResponse.expires_in, 10) : serverTokenResponse.expires_in) || 0;
+      const extExpiresIn = (typeof serverTokenResponse.ext_expires_in === "string" ? parseInt(serverTokenResponse.ext_expires_in, 10) : serverTokenResponse.ext_expires_in) || 0;
+      const refreshIn = (typeof serverTokenResponse.refresh_in === "string" ? parseInt(serverTokenResponse.refresh_in, 10) : serverTokenResponse.refresh_in) || void 0;
+      const tokenExpirationSeconds = reqTimestamp + expiresIn;
+      const extendedTokenExpirationSeconds = tokenExpirationSeconds + extExpiresIn;
+      const refreshOnSeconds = refreshIn && refreshIn > 0 ? reqTimestamp + refreshIn : void 0;
+      cachedAccessToken = createAccessTokenEntity(this.homeAccountIdentifier, env, serverTokenResponse.access_token, this.clientId, claimsTenantId || authority.tenant || "", responseScopes.printScopes(), tokenExpirationSeconds, extendedTokenExpirationSeconds, this.cryptoObj.base64Decode, refreshOnSeconds, serverTokenResponse.token_type, userAssertionHash, serverTokenResponse.key_id);
+      const resource = request5.resource || null;
+      if (resource) {
+        cachedAccessToken.resource = resource;
+      }
+    }
+    let cachedRefreshToken = null;
+    if (serverTokenResponse.refresh_token) {
+      let rtExpiresOn;
+      if (serverTokenResponse.refresh_token_expires_in) {
+        const rtExpiresIn = typeof serverTokenResponse.refresh_token_expires_in === "string" ? parseInt(serverTokenResponse.refresh_token_expires_in, 10) : serverTokenResponse.refresh_token_expires_in;
+        rtExpiresOn = reqTimestamp + rtExpiresIn;
+        this.performanceClient?.addFields({ ntwkRtExpiresOnSeconds: rtExpiresOn }, request5.correlationId);
+      }
+      cachedRefreshToken = createRefreshTokenEntity(this.homeAccountIdentifier, env, serverTokenResponse.refresh_token, this.clientId, serverTokenResponse.foci, userAssertionHash, rtExpiresOn);
+    }
+    let cachedAppMetadata = null;
+    if (serverTokenResponse.foci) {
+      cachedAppMetadata = {
+        clientId: this.clientId,
+        environment: env,
+        familyId: serverTokenResponse.foci
+      };
+    }
+    return {
+      account: cachedAccount,
+      idToken: cachedIdToken,
+      accessToken: cachedAccessToken,
+      refreshToken: cachedRefreshToken,
+      appMetadata: cachedAppMetadata
+    };
+  }
+  /**
+   * Creates an @AuthenticationResult from @CacheRecord , @IdToken , and a boolean that states whether or not the result is from cache.
+   *
+   * Optionally takes a state string that is set as-is in the response.
+   *
+   * @param cacheRecord
+   * @param idTokenObj
+   * @param fromTokenCache
+   * @param stateString
+   */
+  static async generateAuthenticationResult(cryptoObj, authority, cacheRecord, fromTokenCache, request5, performanceClient, idTokenClaims, requestState, serverTokenResponse, requestId) {
+    let accessToken = "";
+    let responseScopes = [];
+    let expiresOn = null;
+    let extExpiresOn;
+    let refreshOn;
+    let familyId = "";
+    if (cacheRecord.accessToken) {
+      if (cacheRecord.accessToken.tokenType === AuthenticationScheme.POP && !request5.popKid) {
+        const popTokenGenerator = new PopTokenGenerator(cryptoObj, performanceClient);
+        const { secret, keyId } = cacheRecord.accessToken;
+        if (!keyId) {
+          throw createClientAuthError(keyIdMissing);
+        }
+        accessToken = await popTokenGenerator.signPopToken(secret, keyId, request5);
+      } else {
+        accessToken = cacheRecord.accessToken.secret;
+      }
+      responseScopes = ScopeSet.fromString(cacheRecord.accessToken.target).asArray();
+      expiresOn = toDateFromSeconds(cacheRecord.accessToken.expiresOn);
+      extExpiresOn = toDateFromSeconds(cacheRecord.accessToken.extendedExpiresOn);
+      if (cacheRecord.accessToken.refreshOn) {
+        refreshOn = toDateFromSeconds(cacheRecord.accessToken.refreshOn);
+      }
+    }
+    if (cacheRecord.appMetadata) {
+      familyId = cacheRecord.appMetadata.familyId === THE_FAMILY_ID ? THE_FAMILY_ID : "";
+    }
+    const uid = idTokenClaims?.oid || idTokenClaims?.sub || "";
+    const tid = idTokenClaims?.tid || "";
+    if (serverTokenResponse?.spa_accountid && !!cacheRecord.account) {
+      cacheRecord.account.nativeAccountId = serverTokenResponse?.spa_accountid;
+    }
+    const accountInfo = cacheRecord.account ? updateAccountTenantProfileData(
+      getAccountInfo(cacheRecord.account),
+      void 0,
+      // tenantProfile optional
+      idTokenClaims,
+      cacheRecord.idToken?.secret
+    ) : null;
+    return {
+      authority: authority.canonicalAuthority,
+      uniqueId: uid,
+      tenantId: tid,
+      scopes: responseScopes,
+      account: accountInfo,
+      idToken: cacheRecord?.idToken?.secret || "",
+      idTokenClaims: idTokenClaims || {},
+      accessToken,
+      fromCache: fromTokenCache,
+      expiresOn,
+      extExpiresOn,
+      refreshOn,
+      correlationId: request5.correlationId,
+      requestId: requestId || "",
+      familyId,
+      tokenType: cacheRecord.accessToken?.tokenType || "",
+      state: requestState ? requestState.userRequestState : "",
+      cloudGraphHostName: cacheRecord.account?.cloudGraphHostName || "",
+      msGraphHost: cacheRecord.account?.msGraphHost || "",
+      code: serverTokenResponse?.spa_code,
+      fromPlatformBroker: false
+    };
+  }
+};
+function buildAccountToCache(cacheStorage, authority, homeAccountId, base64Decode, correlationId, idTokenClaims, clientInfo, environment, claimsTenantId, authCodePayload, nativeAccountId, logger31) {
+  logger31?.verbose("setCachedAccount called", correlationId);
+  const accountKeys = cacheStorage.getAccountKeys();
+  const baseAccountKey = accountKeys.find((accountKey) => {
+    return accountKey.startsWith(homeAccountId);
+  });
+  let cachedAccount = null;
+  if (baseAccountKey) {
+    cachedAccount = cacheStorage.getAccount(baseAccountKey, correlationId);
+  }
+  const baseAccount = cachedAccount || createAccountEntity({
+    homeAccountId,
+    idTokenClaims,
+    clientInfo,
+    environment,
+    cloudGraphHostName: authCodePayload?.cloud_graph_host_name,
+    msGraphHost: authCodePayload?.msgraph_host,
+    nativeAccountId
+  }, authority, base64Decode);
+  const tenantProfiles = baseAccount.tenantProfiles || [];
+  const tenantId = claimsTenantId || baseAccount.realm;
+  if (tenantId && !tenantProfiles.find((tenantProfile) => {
+    return tenantProfile.tenantId === tenantId;
+  })) {
+    const newTenantProfile = buildTenantProfile(homeAccountId, baseAccount.localAccountId, tenantId, idTokenClaims);
+    tenantProfiles.push(newTenantProfile);
+  }
+  baseAccount.tenantProfiles = tenantProfiles;
+  return baseAccount;
+}
+
+// node_modules/@azure/msal-common/dist/account/CcsCredential.mjs
+var CcsCredentialType = {
+  HOME_ACCOUNT_ID: "home_account_id",
+  UPN: "UPN"
+};
+
+// node_modules/@azure/msal-common/dist/utils/ClientAssertionUtils.mjs
+async function getClientAssertion(clientAssertion, clientId, tokenEndpoint) {
+  if (typeof clientAssertion === "string") {
+    return clientAssertion;
+  } else {
+    const config = {
+      clientId,
+      tokenEndpoint
+    };
+    return clientAssertion(config);
+  }
+}
+
+// node_modules/@azure/msal-common/dist/network/RequestThumbprint.mjs
+function getRequestThumbprint(clientId, request5, homeAccountId) {
+  return {
+    clientId,
+    authority: request5.authority,
+    scopes: request5.scopes,
+    homeAccountIdentifier: homeAccountId,
+    claims: request5.claims,
+    authenticationScheme: request5.authenticationScheme,
+    resourceRequestMethod: request5.resourceRequestMethod,
+    resourceRequestUri: request5.resourceRequestUri,
+    shrClaims: request5.shrClaims,
+    sshKid: request5.sshKid,
+    embeddedClientId: request5.embeddedClientId || request5.extraParameters?.clientId
+  };
+}
+
+// node_modules/@azure/msal-common/dist/protocol/Token.mjs
+var Token_exports = {};
+__export(Token_exports, {
+  createTokenQueryParameters: () => createTokenQueryParameters,
+  createTokenRequestHeaders: () => createTokenRequestHeaders,
+  executePostToTokenEndpoint: () => executePostToTokenEndpoint,
+  sendPostRequest: () => sendPostRequest
+});
+
+// node_modules/@azure/msal-common/dist/network/ThrottlingUtils.mjs
+var ThrottlingUtils = class _ThrottlingUtils {
+  /**
+   * Prepares a RequestThumbprint to be stored as a key.
+   * @param thumbprint
+   */
+  static generateThrottlingStorageKey(thumbprint) {
+    return `${THROTTLING_PREFIX}.${JSON.stringify(thumbprint)}`;
+  }
+  /**
+   * Performs necessary throttling checks before a network request.
+   * @param cacheManager
+   * @param thumbprint
+   */
+  static preProcess(cacheManager, thumbprint, correlationId) {
+    const key = _ThrottlingUtils.generateThrottlingStorageKey(thumbprint);
+    const value = cacheManager.getThrottlingCache(key, correlationId);
+    if (value) {
+      if (value.throttleTime < Date.now()) {
+        cacheManager.removeItem(key, correlationId);
+        return;
+      }
+      throw new ServerError(value.errorCodes?.join(" ") || "", value.errorMessage, value.subError);
+    }
+  }
+  /**
+   * Performs necessary throttling checks after a network request.
+   * @param cacheManager
+   * @param thumbprint
+   * @param response
+   */
+  static postProcess(cacheManager, thumbprint, response, correlationId) {
+    if (_ThrottlingUtils.checkResponseStatus(response) || _ThrottlingUtils.checkResponseForRetryAfter(response)) {
+      const thumbprintValue = {
+        throttleTime: _ThrottlingUtils.calculateThrottleTime(parseInt(response.headers[HeaderNames.RETRY_AFTER])),
+        error: response.body.error,
+        errorCodes: response.body.error_codes,
+        errorMessage: response.body.error_description,
+        subError: response.body.suberror
+      };
+      cacheManager.setThrottlingCache(_ThrottlingUtils.generateThrottlingStorageKey(thumbprint), thumbprintValue, correlationId);
+    }
+  }
+  /**
+   * Checks a NetworkResponse object's status codes against 429 or 5xx
+   * @param response
+   */
+  static checkResponseStatus(response) {
+    return response.status === 429 || response.status >= 500 && response.status < 600;
+  }
+  /**
+   * Checks a NetworkResponse object's RetryAfter header
+   * @param response
+   */
+  static checkResponseForRetryAfter(response) {
+    if (response.headers) {
+      return response.headers.hasOwnProperty(HeaderNames.RETRY_AFTER) && (response.status < 200 || response.status >= 300);
+    }
+    return false;
+  }
+  /**
+   * Calculates the Unix-time value for a throttle to expire given throttleTime in seconds.
+   * @param throttleTime
+   */
+  static calculateThrottleTime(throttleTime) {
+    const time = throttleTime <= 0 ? 0 : throttleTime;
+    const currentSeconds = Date.now() / 1e3;
+    return Math.floor(Math.min(currentSeconds + (time || DEFAULT_THROTTLE_TIME_SECONDS), currentSeconds + DEFAULT_MAX_THROTTLE_TIME_SECONDS) * 1e3);
+  }
+  static removeThrottle(cacheManager, clientId, request5, homeAccountIdentifier) {
+    const thumbprint = getRequestThumbprint(clientId, request5, homeAccountIdentifier);
+    const key = this.generateThrottlingStorageKey(thumbprint);
+    cacheManager.removeItem(key, request5.correlationId);
+  }
+};
+
+// node_modules/@azure/msal-common/dist/error/NetworkError.mjs
+var NetworkError = class _NetworkError extends AuthError {
+  constructor(error2, httpStatus, responseHeaders) {
+    super(error2.errorCode, error2.errorMessage, error2.subError);
+    Object.setPrototypeOf(this, _NetworkError.prototype);
+    this.name = "NetworkError";
+    this.error = error2;
+    this.httpStatus = httpStatus;
+    this.responseHeaders = responseHeaders;
+  }
+};
+function createNetworkError(error2, httpStatus, responseHeaders, additionalError) {
+  error2.errorMessage = `${error2.errorMessage}, additionalErrorInfo: error.name:${additionalError?.name}, error.message:${additionalError?.message}`;
+  return new NetworkError(error2, httpStatus, responseHeaders);
+}
+
+// node_modules/@azure/msal-common/dist/protocol/Token.mjs
+function createTokenRequestHeaders(logger31, preventCorsPreflight, ccsCred) {
+  const headers = {};
+  headers[HeaderNames.CONTENT_TYPE] = URL_FORM_CONTENT_TYPE;
+  if (!preventCorsPreflight && ccsCred) {
+    switch (ccsCred.type) {
+      case CcsCredentialType.HOME_ACCOUNT_ID:
+        try {
+          const clientInfo = buildClientInfoFromHomeAccountId(ccsCred.credential);
+          headers[HeaderNames.CCS_HEADER] = `Oid:${clientInfo.uid}@${clientInfo.utid}`;
+        } catch (e) {
+          logger31.verbose(`Could not parse home account ID for CCS Header: '${e}'`, "");
+        }
+        break;
+      case CcsCredentialType.UPN:
+        headers[HeaderNames.CCS_HEADER] = `UPN: ${ccsCred.credential}`;
+        break;
+    }
+  }
+  return headers;
+}
+function createTokenQueryParameters(request5, clientId, redirectUri, performanceClient) {
+  const parameters = /* @__PURE__ */ new Map();
+  if (request5.embeddedClientId) {
+    addBrokerParameters(parameters, clientId, redirectUri);
+  }
+  if (request5.extraQueryParameters) {
+    addExtraParameters(parameters, request5.extraQueryParameters);
+  }
+  addCorrelationId(parameters, request5.correlationId);
+  instrumentBrokerParams(parameters, request5.correlationId, performanceClient);
+  return mapToQueryString(parameters);
+}
+async function executePostToTokenEndpoint(tokenEndpoint, queryString, headers, thumbprint, correlationId, cacheManager, networkClient, logger31, performanceClient, serverTelemetryManager) {
+  const response = await sendPostRequest(thumbprint, tokenEndpoint, { body: queryString, headers }, correlationId, cacheManager, networkClient, logger31, performanceClient);
+  if (serverTelemetryManager && response.status < 500 && response.status !== 429) {
+    serverTelemetryManager.clearTelemetryCache();
+  }
+  return response;
+}
+async function sendPostRequest(thumbprint, tokenEndpoint, options, correlationId, cacheManager, networkClient, logger31, performanceClient) {
+  ThrottlingUtils.preProcess(cacheManager, thumbprint, correlationId);
+  let response;
+  try {
+    response = await invokeAsync(networkClient.sendPostRequestAsync.bind(networkClient), NetworkClientSendPostRequestAsync, logger31, performanceClient, correlationId)(tokenEndpoint, options);
+    const responseHeaders = response.headers || {};
+    performanceClient?.addFields({
+      refreshTokenSize: response.body.refresh_token?.length || 0,
+      httpVerToken: responseHeaders[HeaderNames.X_MS_HTTP_VERSION] || "",
+      requestId: responseHeaders[HeaderNames.X_MS_REQUEST_ID] || ""
+    }, correlationId);
+  } catch (e) {
+    if (e instanceof NetworkError) {
+      const responseHeaders = e.responseHeaders;
+      if (responseHeaders) {
+        performanceClient?.addFields({
+          httpVerToken: responseHeaders[HeaderNames.X_MS_HTTP_VERSION] || "",
+          requestId: responseHeaders[HeaderNames.X_MS_REQUEST_ID] || "",
+          contentTypeHeader: responseHeaders[HeaderNames.CONTENT_TYPE] || void 0,
+          contentLengthHeader: responseHeaders[HeaderNames.CONTENT_LENGTH] || void 0,
+          httpStatus: e.httpStatus
+        }, correlationId);
+      }
+      throw e.error;
+    }
+    if (e instanceof AuthError) {
+      throw e;
+    } else {
+      throw createClientAuthError(networkError);
+    }
+  }
+  ThrottlingUtils.postProcess(cacheManager, thumbprint, response, correlationId);
+  return response;
+}
+
+// node_modules/@azure/msal-common/dist/authority/AuthorityFactory.mjs
+var AuthorityFactory_exports = {};
+__export(AuthorityFactory_exports, {
+  createDiscoveredInstance: () => createDiscoveredInstance
+});
+
+// node_modules/@azure/msal-common/dist/authority/OpenIdConfigResponse.mjs
+function isOpenIdConfigResponse(response) {
+  return response.hasOwnProperty("authorization_endpoint") && response.hasOwnProperty("token_endpoint") && response.hasOwnProperty("issuer") && response.hasOwnProperty("jwks_uri");
+}
+
+// node_modules/@azure/msal-common/dist/authority/CloudInstanceDiscoveryResponse.mjs
+function isCloudInstanceDiscoveryResponse(response) {
+  return response.hasOwnProperty("tenant_discovery_endpoint") && response.hasOwnProperty("metadata");
+}
+
+// node_modules/@azure/msal-common/dist/authority/CloudInstanceDiscoveryErrorResponse.mjs
+function isCloudInstanceDiscoveryErrorResponse(response) {
+  return response.hasOwnProperty("error") && response.hasOwnProperty("error_description");
+}
+
+// node_modules/@azure/msal-common/dist/authority/RegionDiscovery.mjs
 var RegionDiscovery = class _RegionDiscovery {
   constructor(networkInterface, logger31, performanceClient, correlationId) {
     this.networkInterface = networkInterface;
@@ -35143,24 +36219,23 @@ var RegionDiscovery = class _RegionDiscovery {
    * @returns Promise<string | null>
    */
   async detectRegion(environmentRegion, regionDiscoveryMetadata) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.RegionDiscoveryDetectRegion, this.correlationId);
     let autodetectedRegionName = environmentRegion;
     if (!autodetectedRegionName) {
       const options = _RegionDiscovery.IMDS_OPTIONS;
       try {
-        const localIMDSVersionResponse = await invokeAsync(this.getRegionFromIMDS.bind(this), PerformanceEvents.RegionDiscoveryGetRegionFromIMDS, this.logger, this.performanceClient, this.correlationId)(Constants.IMDS_VERSION, options);
-        if (localIMDSVersionResponse.status === ResponseCodes.httpSuccess) {
+        const localIMDSVersionResponse = await invokeAsync(this.getRegionFromIMDS.bind(this), RegionDiscoveryGetRegionFromIMDS, this.logger, this.performanceClient, this.correlationId)(IMDS_VERSION, options);
+        if (localIMDSVersionResponse.status === HTTP_SUCCESS) {
           autodetectedRegionName = localIMDSVersionResponse.body;
           regionDiscoveryMetadata.region_source = RegionDiscoverySources.IMDS;
         }
-        if (localIMDSVersionResponse.status === ResponseCodes.httpBadRequest) {
-          const currentIMDSVersion = await invokeAsync(this.getCurrentVersion.bind(this), PerformanceEvents.RegionDiscoveryGetCurrentVersion, this.logger, this.performanceClient, this.correlationId)(options);
+        if (localIMDSVersionResponse.status === HTTP_BAD_REQUEST) {
+          const currentIMDSVersion = await invokeAsync(this.getCurrentVersion.bind(this), RegionDiscoveryGetCurrentVersion, this.logger, this.performanceClient, this.correlationId)(options);
           if (!currentIMDSVersion) {
             regionDiscoveryMetadata.region_source = RegionDiscoverySources.FAILED_AUTO_DETECTION;
             return null;
           }
-          const currentIMDSVersionResponse = await invokeAsync(this.getRegionFromIMDS.bind(this), PerformanceEvents.RegionDiscoveryGetRegionFromIMDS, this.logger, this.performanceClient, this.correlationId)(currentIMDSVersion, options);
-          if (currentIMDSVersionResponse.status === ResponseCodes.httpSuccess) {
+          const currentIMDSVersionResponse = await invokeAsync(this.getRegionFromIMDS.bind(this), RegionDiscoveryGetRegionFromIMDS, this.logger, this.performanceClient, this.correlationId)(currentIMDSVersion, options);
+          if (currentIMDSVersionResponse.status === HTTP_SUCCESS) {
             autodetectedRegionName = currentIMDSVersionResponse.body;
             regionDiscoveryMetadata.region_source = RegionDiscoverySources.IMDS;
           }
@@ -35184,8 +36259,7 @@ var RegionDiscovery = class _RegionDiscovery {
    * @returns Promise<NetworkResponse<string>>
    */
   async getRegionFromIMDS(version3, options) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.RegionDiscoveryGetRegionFromIMDS, this.correlationId);
-    return this.networkInterface.sendGetRequestAsync(`${Constants.IMDS_ENDPOINT}?api-version=${version3}&format=text`, options, Constants.IMDS_TIMEOUT);
+    return this.networkInterface.sendGetRequestAsync(`${IMDS_ENDPOINT}?api-version=${version3}&format=text`, options, IMDS_TIMEOUT);
   }
   /**
    * Get the most recent version of the IMDS endpoint available
@@ -35193,10 +36267,9 @@ var RegionDiscovery = class _RegionDiscovery {
    * @returns Promise<string | null>
    */
   async getCurrentVersion(options) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.RegionDiscoveryGetCurrentVersion, this.correlationId);
     try {
-      const response = await this.networkInterface.sendGetRequestAsync(`${Constants.IMDS_ENDPOINT}?format=json`, options);
-      if (response.status === ResponseCodes.httpBadRequest && response.body && response.body["newest-versions"] && response.body["newest-versions"].length > 0) {
+      const response = await this.networkInterface.sendGetRequestAsync(`${IMDS_ENDPOINT}?format=json`, options);
+      if (response.status === HTTP_BAD_REQUEST && response.body && response.body["newest-versions"] && response.body["newest-versions"].length > 0) {
         return response.body["newest-versions"][0];
       }
       return null;
@@ -35211,7 +36284,7 @@ RegionDiscovery.IMDS_OPTIONS = {
   }
 };
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/Authority.mjs
+// node_modules/@azure/msal-common/dist/authority/Authority.mjs
 var Authority = class _Authority {
   constructor(authority, networkInterface, cacheManager, authorityOptions, logger31, correlationId, performanceClient, managedIdentity) {
     this.canonicalAuthority = authority;
@@ -35236,15 +36309,15 @@ var Authority = class _Authority {
    * @private
    */
   getAuthorityType(authorityUri) {
-    if (authorityUri.HostNameAndPort.endsWith(Constants.CIAM_AUTH_URL)) {
+    if (authorityUri.HostNameAndPort.endsWith(CIAM_AUTH_URL)) {
       return AuthorityType.Ciam;
     }
     const pathSegments = authorityUri.PathSegments;
     if (pathSegments.length) {
       switch (pathSegments[0].toLowerCase()) {
-        case Constants.ADFS:
+        case ADFS:
           return AuthorityType.Adfs;
-        case Constants.DSTS:
+        case DSTS:
           return AuthorityType.Dsts;
       }
     }
@@ -35391,7 +36464,7 @@ var Authority = class _Authority {
       if (index === 0 && this.canReplaceTenant(cachedAuthorityUrlComponents)) {
         const tenantId = new UrlString(this.metadata.authorization_endpoint).getUrlComponents().PathSegments[0];
         if (cachedPart !== tenantId) {
-          this.logger.verbose(`Replacing tenant domain name ${cachedPart} with id ${tenantId}`);
+          this.logger.verbose(`Replacing tenant domain name '${cachedPart}' with id '${tenantId}'`, this.correlationId);
           cachedPart = tenantId;
         }
       }
@@ -35422,11 +36495,10 @@ var Authority = class _Authority {
    * and the /authorize, /token and logout endpoints.
    */
   async resolveEndpointsAsync() {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthorityResolveEndpointsAsync, this.correlationId);
     const metadataEntity = this.getCurrentMetadataEntity();
-    const cloudDiscoverySource = await invokeAsync(this.updateCloudDiscoveryMetadata.bind(this), PerformanceEvents.AuthorityUpdateCloudDiscoveryMetadata, this.logger, this.performanceClient, this.correlationId)(metadataEntity);
+    const cloudDiscoverySource = await invokeAsync(this.updateCloudDiscoveryMetadata.bind(this), AuthorityUpdateCloudDiscoveryMetadata, this.logger, this.performanceClient, this.correlationId)(metadataEntity);
     this.canonicalAuthority = this.canonicalAuthority.replace(this.hostnameAndPort, metadataEntity.preferred_network);
-    const endpointSource = await invokeAsync(this.updateEndpointMetadata.bind(this), PerformanceEvents.AuthorityUpdateEndpointMetadata, this.logger, this.performanceClient, this.correlationId)(metadataEntity);
+    const endpointSource = await invokeAsync(this.updateEndpointMetadata.bind(this), AuthorityUpdateEndpointMetadata, this.logger, this.performanceClient, this.correlationId)(metadataEntity);
     this.updateCachedMetadata(metadataEntity, cloudDiscoverySource, {
       source: endpointSource
     });
@@ -35441,7 +36513,7 @@ var Authority = class _Authority {
    * @returns
    */
   getCurrentMetadataEntity() {
-    let metadataEntity = this.cacheManager.getAuthorityMetadataByAlias(this.hostnameAndPort);
+    let metadataEntity = this.cacheManager.getAuthorityMetadataByAlias(this.hostnameAndPort, this.correlationId);
     if (!metadataEntity) {
       metadataEntity = {
         aliases: [],
@@ -35472,8 +36544,8 @@ var Authority = class _Authority {
       metadataEntity.expiresAt = generateAuthorityMetadataExpiresAt();
       metadataEntity.canonical_authority = this.canonicalAuthority;
     }
-    const cacheKey = this.cacheManager.generateAuthorityMetadataCacheKey(metadataEntity.preferred_cache);
-    this.cacheManager.setAuthorityMetadata(cacheKey, metadataEntity);
+    const cacheKey = this.cacheManager.generateAuthorityMetadataCacheKey(metadataEntity.preferred_cache, this.correlationId);
+    this.cacheManager.setAuthorityMetadata(cacheKey, metadataEntity, this.correlationId);
     this.metadata = metadataEntity;
   }
   /**
@@ -35481,13 +36553,12 @@ var Authority = class _Authority {
    * @param metadataEntity
    */
   async updateEndpointMetadata(metadataEntity) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthorityUpdateEndpointMetadata, this.correlationId);
     const localMetadata = this.updateEndpointMetadataFromLocalSources(metadataEntity);
     if (localMetadata) {
       if (localMetadata.source === AuthorityMetadataSource.HARDCODED_VALUES) {
         if (this.authorityOptions.azureRegionConfiguration?.azureRegion) {
           if (localMetadata.metadata) {
-            const hardcodedMetadata = await invokeAsync(this.updateMetadataWithRegionalInformation.bind(this), PerformanceEvents.AuthorityUpdateMetadataWithRegionalInformation, this.logger, this.performanceClient, this.correlationId)(localMetadata.metadata);
+            const hardcodedMetadata = await invokeAsync(this.updateMetadataWithRegionalInformation.bind(this), AuthorityUpdateMetadataWithRegionalInformation, this.logger, this.performanceClient, this.correlationId)(localMetadata.metadata);
             updateAuthorityEndpointMetadata(metadataEntity, hardcodedMetadata, false);
             metadataEntity.canonical_authority = this.canonicalAuthority;
           }
@@ -35495,10 +36566,10 @@ var Authority = class _Authority {
       }
       return localMetadata.source;
     }
-    let metadata = await invokeAsync(this.getEndpointMetadataFromNetwork.bind(this), PerformanceEvents.AuthorityGetEndpointMetadataFromNetwork, this.logger, this.performanceClient, this.correlationId)();
+    let metadata = await invokeAsync(this.getEndpointMetadataFromNetwork.bind(this), AuthorityGetEndpointMetadataFromNetwork, this.logger, this.performanceClient, this.correlationId)();
     if (metadata) {
       if (this.authorityOptions.azureRegionConfiguration?.azureRegion) {
-        metadata = await invokeAsync(this.updateMetadataWithRegionalInformation.bind(this), PerformanceEvents.AuthorityUpdateMetadataWithRegionalInformation, this.logger, this.performanceClient, this.correlationId)(metadata);
+        metadata = await invokeAsync(this.updateMetadataWithRegionalInformation.bind(this), AuthorityUpdateMetadataWithRegionalInformation, this.logger, this.performanceClient, this.correlationId)(metadata);
       }
       updateAuthorityEndpointMetadata(metadataEntity, metadata, true);
       return AuthorityMetadataSource.NETWORK;
@@ -35513,36 +36584,32 @@ var Authority = class _Authority {
    * @returns
    */
   updateEndpointMetadataFromLocalSources(metadataEntity) {
-    this.logger.verbose("Attempting to get endpoint metadata from authority configuration");
+    this.logger.verbose("Attempting to get endpoint metadata from authority configuration", this.correlationId);
     const configMetadata = this.getEndpointMetadataFromConfig();
     if (configMetadata) {
-      this.logger.verbose("Found endpoint metadata in authority configuration");
+      this.logger.verbose("Found endpoint metadata in authority configuration", this.correlationId);
       updateAuthorityEndpointMetadata(metadataEntity, configMetadata, false);
       return {
         source: AuthorityMetadataSource.CONFIG
       };
     }
-    this.logger.verbose("Did not find endpoint metadata in the config... Attempting to get endpoint metadata from the hardcoded values.");
-    if (this.authorityOptions.skipAuthorityMetadataCache) {
-      this.logger.verbose("Skipping hardcoded metadata cache since skipAuthorityMetadataCache is set to true. Attempting to get endpoint metadata from the network metadata cache.");
+    this.logger.verbose("Did not find endpoint metadata in the config... Attempting to get endpoint metadata from the hardcoded values.", this.correlationId);
+    const hardcodedMetadata = this.getEndpointMetadataFromHardcodedValues();
+    if (hardcodedMetadata) {
+      updateAuthorityEndpointMetadata(metadataEntity, hardcodedMetadata, false);
+      return {
+        source: AuthorityMetadataSource.HARDCODED_VALUES,
+        metadata: hardcodedMetadata
+      };
     } else {
-      const hardcodedMetadata = this.getEndpointMetadataFromHardcodedValues();
-      if (hardcodedMetadata) {
-        updateAuthorityEndpointMetadata(metadataEntity, hardcodedMetadata, false);
-        return {
-          source: AuthorityMetadataSource.HARDCODED_VALUES,
-          metadata: hardcodedMetadata
-        };
-      } else {
-        this.logger.verbose("Did not find endpoint metadata in hardcoded values... Attempting to get endpoint metadata from the network metadata cache.");
-      }
+      this.logger.verbose("Did not find endpoint metadata in hardcoded values... Attempting to get endpoint metadata from the network metadata cache.", this.correlationId);
     }
     const metadataEntityExpired = isAuthorityMetadataExpired(metadataEntity);
     if (this.isAuthoritySameType(metadataEntity) && metadataEntity.endpointsFromNetwork && !metadataEntityExpired) {
-      this.logger.verbose("Found endpoint metadata in the cache.");
+      this.logger.verbose("Found endpoint metadata in the cache.", "");
       return { source: AuthorityMetadataSource.CACHE };
     } else if (metadataEntityExpired) {
-      this.logger.verbose("The metadata entity is expired.");
+      this.logger.verbose("The metadata entity is expired.", "");
     }
     return null;
   }
@@ -35576,21 +36643,20 @@ var Authority = class _Authority {
    * @param hasHardcodedMetadata boolean
    */
   async getEndpointMetadataFromNetwork() {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthorityGetEndpointMetadataFromNetwork, this.correlationId);
     const options = {};
     const openIdConfigurationEndpoint = this.defaultOpenIdConfigurationEndpoint;
-    this.logger.verbose(`Authority.getEndpointMetadataFromNetwork: attempting to retrieve OAuth endpoints from ${openIdConfigurationEndpoint}`);
+    this.logger.verbose(`Authority.getEndpointMetadataFromNetwork: attempting to retrieve OAuth endpoints from '${openIdConfigurationEndpoint}'`, this.correlationId);
     try {
       const response = await this.networkInterface.sendGetRequestAsync(openIdConfigurationEndpoint, options);
       const isValidResponse = isOpenIdConfigResponse(response.body);
       if (isValidResponse) {
         return response.body;
       } else {
-        this.logger.verbose(`Authority.getEndpointMetadataFromNetwork: could not parse response as OpenID configuration`);
+        this.logger.verbose(`Authority.getEndpointMetadataFromNetwork: could not parse response as OpenID configuration`, this.correlationId);
         return null;
       }
     } catch (e) {
-      this.logger.verbose(`Authority.getEndpointMetadataFromNetwork: ${e}`);
+      this.logger.verbose(`Authority.getEndpointMetadataFromNetwork: '${e}'`, this.correlationId);
       return null;
     }
   }
@@ -35608,15 +36674,14 @@ var Authority = class _Authority {
    * User selected Azure region will be used if configured.
    */
   async updateMetadataWithRegionalInformation(metadata) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthorityUpdateMetadataWithRegionalInformation, this.correlationId);
     const userConfiguredAzureRegion = this.authorityOptions.azureRegionConfiguration?.azureRegion;
     if (userConfiguredAzureRegion) {
-      if (userConfiguredAzureRegion !== Constants.AZURE_REGION_AUTO_DISCOVER_FLAG) {
+      if (userConfiguredAzureRegion !== AZURE_REGION_AUTO_DISCOVER_FLAG) {
         this.regionDiscoveryMetadata.region_outcome = RegionDiscoveryOutcomes.CONFIGURED_NO_AUTO_DETECTION;
         this.regionDiscoveryMetadata.region_used = userConfiguredAzureRegion;
         return _Authority.replaceWithRegionalInformation(metadata, userConfiguredAzureRegion);
       }
-      const autodetectedRegionName = await invokeAsync(this.regionDiscovery.detectRegion.bind(this.regionDiscovery), PerformanceEvents.RegionDiscoveryDetectRegion, this.logger, this.performanceClient, this.correlationId)(this.authorityOptions.azureRegionConfiguration?.environmentRegion, this.regionDiscoveryMetadata);
+      const autodetectedRegionName = await invokeAsync(this.regionDiscovery.detectRegion.bind(this.regionDiscovery), RegionDiscoveryDetectRegion, this.logger, this.performanceClient, this.correlationId)(this.authorityOptions.azureRegionConfiguration?.environmentRegion, this.regionDiscoveryMetadata);
       if (autodetectedRegionName) {
         this.regionDiscoveryMetadata.region_outcome = RegionDiscoveryOutcomes.AUTO_DETECTION_REQUESTED_SUCCESSFUL;
         this.regionDiscoveryMetadata.region_used = autodetectedRegionName;
@@ -35633,12 +36698,11 @@ var Authority = class _Authority {
    * @returns AuthorityMetadataSource
    */
   async updateCloudDiscoveryMetadata(metadataEntity) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthorityUpdateCloudDiscoveryMetadata, this.correlationId);
     const localMetadataSource = this.updateCloudDiscoveryMetadataFromLocalSources(metadataEntity);
     if (localMetadataSource) {
       return localMetadataSource;
     }
-    const metadata = await invokeAsync(this.getCloudDiscoveryMetadataFromNetwork.bind(this), PerformanceEvents.AuthorityGetCloudDiscoveryMetadataFromNetwork, this.logger, this.performanceClient, this.correlationId)();
+    const metadata = await invokeAsync(this.getCloudDiscoveryMetadataFromNetwork.bind(this), AuthorityGetCloudDiscoveryMetadataFromNetwork, this.logger, this.performanceClient, this.correlationId)();
     if (metadata) {
       updateCloudDiscoveryMetadata(metadataEntity, metadata, true);
       return AuthorityMetadataSource.NETWORK;
@@ -35646,34 +36710,30 @@ var Authority = class _Authority {
     throw createClientConfigurationError(untrustedAuthority);
   }
   updateCloudDiscoveryMetadataFromLocalSources(metadataEntity) {
-    this.logger.verbose("Attempting to get cloud discovery metadata  from authority configuration");
-    this.logger.verbosePii(`Known Authorities: ${this.authorityOptions.knownAuthorities || Constants.NOT_APPLICABLE}`);
-    this.logger.verbosePii(`Authority Metadata: ${this.authorityOptions.authorityMetadata || Constants.NOT_APPLICABLE}`);
-    this.logger.verbosePii(`Canonical Authority: ${metadataEntity.canonical_authority || Constants.NOT_APPLICABLE}`);
+    this.logger.verbose("Attempting to get cloud discovery metadata  from authority configuration", this.correlationId);
+    this.logger.verbosePii(`Known Authorities: '${this.authorityOptions.knownAuthorities || NOT_APPLICABLE}'`, this.correlationId);
+    this.logger.verbosePii(`Authority Metadata: '${this.authorityOptions.authorityMetadata || NOT_APPLICABLE}'`, this.correlationId);
+    this.logger.verbosePii(`Canonical Authority: '${metadataEntity.canonical_authority || NOT_APPLICABLE}'`, this.correlationId);
     const metadata = this.getCloudDiscoveryMetadataFromConfig();
     if (metadata) {
-      this.logger.verbose("Found cloud discovery metadata in authority configuration");
+      this.logger.verbose("Found cloud discovery metadata in authority configuration", this.correlationId);
       updateCloudDiscoveryMetadata(metadataEntity, metadata, false);
       return AuthorityMetadataSource.CONFIG;
     }
-    this.logger.verbose("Did not find cloud discovery metadata in the config... Attempting to get cloud discovery metadata from the hardcoded values.");
-    if (this.options.skipAuthorityMetadataCache) {
-      this.logger.verbose("Skipping hardcoded cloud discovery metadata cache since skipAuthorityMetadataCache is set to true. Attempting to get cloud discovery metadata from the network metadata cache.");
-    } else {
-      const hardcodedMetadata = getCloudDiscoveryMetadataFromHardcodedValues(this.hostnameAndPort);
-      if (hardcodedMetadata) {
-        this.logger.verbose("Found cloud discovery metadata from hardcoded values.");
-        updateCloudDiscoveryMetadata(metadataEntity, hardcodedMetadata, false);
-        return AuthorityMetadataSource.HARDCODED_VALUES;
-      }
-      this.logger.verbose("Did not find cloud discovery metadata in hardcoded values... Attempting to get cloud discovery metadata from the network metadata cache.");
+    this.logger.verbose("Did not find cloud discovery metadata in the config... Attempting to get cloud discovery metadata from the hardcoded values.", this.correlationId);
+    const hardcodedMetadata = getCloudDiscoveryMetadataFromHardcodedValues(this.hostnameAndPort);
+    if (hardcodedMetadata) {
+      this.logger.verbose("Found cloud discovery metadata from hardcoded values.", this.correlationId);
+      updateCloudDiscoveryMetadata(metadataEntity, hardcodedMetadata, false);
+      return AuthorityMetadataSource.HARDCODED_VALUES;
     }
+    this.logger.verbose("Did not find cloud discovery metadata in hardcoded values... Attempting to get cloud discovery metadata from the network metadata cache.", this.correlationId);
     const metadataEntityExpired = isAuthorityMetadataExpired(metadataEntity);
     if (this.isAuthoritySameType(metadataEntity) && metadataEntity.aliasesFromNetwork && !metadataEntityExpired) {
-      this.logger.verbose("Found cloud discovery metadata in the cache.");
+      this.logger.verbose("Found cloud discovery metadata in the cache.", "");
       return AuthorityMetadataSource.CACHE;
     } else if (metadataEntityExpired) {
-      this.logger.verbose("The metadata entity is expired.");
+      this.logger.verbose("The metadata entity is expired.", "");
     }
     return null;
   }
@@ -35682,29 +36742,29 @@ var Authority = class _Authority {
    */
   getCloudDiscoveryMetadataFromConfig() {
     if (this.authorityType === AuthorityType.Ciam) {
-      this.logger.verbose("CIAM authorities do not support cloud discovery metadata, generate the aliases from authority host.");
+      this.logger.verbose("CIAM authorities do not support cloud discovery metadata, generate the aliases from authority host.", this.correlationId);
       return _Authority.createCloudDiscoveryMetadataFromHost(this.hostnameAndPort);
     }
     if (this.authorityOptions.cloudDiscoveryMetadata) {
-      this.logger.verbose("The cloud discovery metadata has been provided as a network response, in the config.");
+      this.logger.verbose("The cloud discovery metadata has been provided as a network response, in the config.", this.correlationId);
       try {
-        this.logger.verbose("Attempting to parse the cloud discovery metadata.");
+        this.logger.verbose("Attempting to parse the cloud discovery metadata.", this.correlationId);
         const parsedResponse = JSON.parse(this.authorityOptions.cloudDiscoveryMetadata);
         const metadata = getCloudDiscoveryMetadataFromNetworkResponse(parsedResponse.metadata, this.hostnameAndPort);
-        this.logger.verbose("Parsed the cloud discovery metadata.");
+        this.logger.verbose("Parsed the cloud discovery metadata.", "");
         if (metadata) {
-          this.logger.verbose("There is returnable metadata attached to the parsed cloud discovery metadata.");
+          this.logger.verbose("There is returnable metadata attached to the parsed cloud discovery metadata.", this.correlationId);
           return metadata;
         } else {
-          this.logger.verbose("There is no metadata attached to the parsed cloud discovery metadata.");
+          this.logger.verbose("There is no metadata attached to the parsed cloud discovery metadata.", this.correlationId);
         }
       } catch (e) {
-        this.logger.verbose("Unable to parse the cloud discovery metadata. Throwing Invalid Cloud Discovery Metadata Error.");
+        this.logger.verbose("Unable to parse the cloud discovery metadata. Throwing Invalid Cloud Discovery Metadata Error.", this.correlationId);
         throw createClientConfigurationError(invalidCloudDiscoveryMetadata);
       }
     }
     if (this.isInKnownAuthorities()) {
-      this.logger.verbose("The host is included in knownAuthorities. Creating new cloud discovery metadata from the host.");
+      this.logger.verbose("The host is included in knownAuthorities. Creating new cloud discovery metadata from the host.", this.correlationId);
       return _Authority.createCloudDiscoveryMetadataFromHost(this.hostnameAndPort);
     }
     return null;
@@ -35715,8 +36775,7 @@ var Authority = class _Authority {
    * @param hasHardcodedMetadata boolean
    */
   async getCloudDiscoveryMetadataFromNetwork() {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthorityGetCloudDiscoveryMetadataFromNetwork, this.correlationId);
-    const instanceDiscoveryEndpoint = `${Constants.AAD_INSTANCE_DISCOVERY_ENDPT}${this.canonicalAuthority}oauth2/v2.0/authorize`;
+    const instanceDiscoveryEndpoint = `${AAD_INSTANCE_DISCOVERY_ENDPT}${this.canonicalAuthority}oauth2/v2.0/authorize`;
     const options = {};
     let match = null;
     try {
@@ -35726,40 +36785,40 @@ var Authority = class _Authority {
       if (isCloudInstanceDiscoveryResponse(response.body)) {
         typedResponseBody = response.body;
         metadata = typedResponseBody.metadata;
-        this.logger.verbosePii(`tenant_discovery_endpoint is: ${typedResponseBody.tenant_discovery_endpoint}`);
+        this.logger.verbosePii(`tenant_discovery_endpoint is: '${typedResponseBody.tenant_discovery_endpoint}'`, this.correlationId);
       } else if (isCloudInstanceDiscoveryErrorResponse(response.body)) {
-        this.logger.warning(`A CloudInstanceDiscoveryErrorResponse was returned. The cloud instance discovery network request's status code is: ${response.status}`);
+        this.logger.warning(`A CloudInstanceDiscoveryErrorResponse was returned. The cloud instance discovery network request's status code is: '${response.status}'`, this.correlationId);
         typedResponseBody = response.body;
-        if (typedResponseBody.error === Constants.INVALID_INSTANCE) {
-          this.logger.error("The CloudInstanceDiscoveryErrorResponse error is invalid_instance.");
+        if (typedResponseBody.error === INVALID_INSTANCE) {
+          this.logger.error("The CloudInstanceDiscoveryErrorResponse error is invalid_instance.", this.correlationId);
           return null;
         }
-        this.logger.warning(`The CloudInstanceDiscoveryErrorResponse error is ${typedResponseBody.error}`);
-        this.logger.warning(`The CloudInstanceDiscoveryErrorResponse error description is ${typedResponseBody.error_description}`);
-        this.logger.warning("Setting the value of the CloudInstanceDiscoveryMetadata (returned from the network) to []");
+        this.logger.warning(`The CloudInstanceDiscoveryErrorResponse error is '${typedResponseBody.error}'`, this.correlationId);
+        this.logger.warning(`The CloudInstanceDiscoveryErrorResponse error description is '${typedResponseBody.error_description}'`, this.correlationId);
+        this.logger.warning("Setting the value of the CloudInstanceDiscoveryMetadata (returned from the network, correlationId) to []", this.correlationId);
         metadata = [];
       } else {
-        this.logger.error("AAD did not return a CloudInstanceDiscoveryResponse or CloudInstanceDiscoveryErrorResponse");
+        this.logger.error("AAD did not return a CloudInstanceDiscoveryResponse or CloudInstanceDiscoveryErrorResponse", this.correlationId);
         return null;
       }
-      this.logger.verbose("Attempting to find a match between the developer's authority and the CloudInstanceDiscoveryMetadata returned from the network request.");
+      this.logger.verbose("Attempting to find a match between the developer's authority and the CloudInstanceDiscoveryMetadata returned from the network request.", this.correlationId);
       match = getCloudDiscoveryMetadataFromNetworkResponse(metadata, this.hostnameAndPort);
     } catch (error2) {
       if (error2 instanceof AuthError) {
         this.logger.error(`There was a network error while attempting to get the cloud discovery instance metadata.
-Error: ${error2.errorCode}
-Error Description: ${error2.errorMessage}`);
+Error: '${error2.errorCode}'
+Error Description: '${error2.errorMessage}'`, this.correlationId);
       } else {
         const typedError = error2;
         this.logger.error(`A non-MSALJS error was thrown while attempting to get the cloud instance discovery metadata.
-Error: ${typedError.name}
-Error Description: ${typedError.message}`);
+Error: '${typedError.name}'
+Error Description: '${typedError.message}'`, this.correlationId);
       }
       return null;
     }
     if (!match) {
-      this.logger.warning("The developer's authority was not found within the CloudInstanceDiscoveryMetadata returned from the network request.");
-      this.logger.verbose("Creating custom Authority for custom domain scenario.");
+      this.logger.warning("The developer's authority was not found within the CloudInstanceDiscoveryMetadata returned from the network request.", this.correlationId);
+      this.logger.verbose("Creating custom Authority for custom domain scenario.", this.correlationId);
       match = _Authority.createCloudDiscoveryMetadataFromHost(this.hostnameAndPort);
     }
     return match;
@@ -35781,7 +36840,7 @@ Error Description: ${typedError.message}`);
   static generateAuthority(authorityString, azureCloudOptions) {
     let authorityAzureCloudInstance;
     if (azureCloudOptions && azureCloudOptions.azureCloudInstance !== AzureCloudInstance.None) {
-      const tenant = azureCloudOptions.tenant ? azureCloudOptions.tenant : Constants.DEFAULT_COMMON_TENANT;
+      const tenant = azureCloudOptions.tenant ? azureCloudOptions.tenant : DEFAULT_COMMON_TENANT;
       authorityAzureCloudInstance = `${azureCloudOptions.azureCloudInstance}/${tenant}/`;
     }
     return authorityAzureCloudInstance ? authorityAzureCloudInstance : authorityString;
@@ -35802,7 +36861,7 @@ Error Description: ${typedError.message}`);
    */
   getPreferredCache() {
     if (this.managedIdentity) {
-      return Constants.DEFAULT_AUTHORITY_HOST;
+      return DEFAULT_AUTHORITY_HOST;
     } else if (this.discoveryComplete()) {
       return this.metadata.preferred_cache;
     } else {
@@ -35830,7 +36889,7 @@ Error Description: ${typedError.message}`);
    * @returns bool
    */
   static isPublicCloudAuthority(host) {
-    return Constants.KNOWN_PUBLIC_CLOUDS.indexOf(host) >= 0;
+    return KNOWN_PUBLIC_CLOUDS.indexOf(host) >= 0;
   }
   /**
    * Rebuild the authority string with the region
@@ -35844,7 +36903,7 @@ Error Description: ${typedError.message}`);
     const authorityUrlParts = authorityUrlInstance.getUrlComponents();
     let hostNameAndPort = `${region}.${authorityUrlParts.HostNameAndPort}`;
     if (this.isPublicCloudAuthority(authorityUrlParts.HostNameAndPort)) {
-      hostNameAndPort = `${region}.${Constants.REGIONAL_AUTH_PUBLIC_CLOUD_SUFFIX}`;
+      hostNameAndPort = `${region}.${REGIONAL_AUTH_PUBLIC_CLOUD_SUFFIX}`;
     }
     const url = UrlString.constructAuthorityUriFromObject({
       ...authorityUrlInstance.getUrlComponents(),
@@ -35882,9 +36941,9 @@ Error Description: ${typedError.message}`);
     let ciamAuthority = authority;
     const authorityUrl = new UrlString(authority);
     const authorityUrlComponents = authorityUrl.getUrlComponents();
-    if (authorityUrlComponents.PathSegments.length === 0 && authorityUrlComponents.HostNameAndPort.endsWith(Constants.CIAM_AUTH_URL)) {
+    if (authorityUrlComponents.PathSegments.length === 0 && authorityUrlComponents.HostNameAndPort.endsWith(CIAM_AUTH_URL)) {
       const tenantIdOrDomain = authorityUrlComponents.HostNameAndPort.split(".")[0];
-      ciamAuthority = `${ciamAuthority}${tenantIdOrDomain}${Constants.AAD_TENANT_DOMAIN_SUFFIX}`;
+      ciamAuthority = `${ciamAuthority}${tenantIdOrDomain}${AAD_TENANT_DOMAIN_SUFFIX}`;
     }
     return ciamAuthority;
   }
@@ -35892,25 +36951,25 @@ Error Description: ${typedError.message}`);
 Authority.reservedTenantDomains = /* @__PURE__ */ new Set([
   "{tenant}",
   "{tenantid}",
-  AADAuthorityConstants.COMMON,
-  AADAuthorityConstants.CONSUMERS,
-  AADAuthorityConstants.ORGANIZATIONS
+  AADAuthority.COMMON,
+  AADAuthority.CONSUMERS,
+  AADAuthority.ORGANIZATIONS
 ]);
 function getTenantFromAuthorityString(authority) {
   const authorityUrl = new UrlString(authority);
   const authorityUrlComponents = authorityUrl.getUrlComponents();
   const tenantId = authorityUrlComponents.PathSegments.slice(-1)[0]?.toLowerCase();
   switch (tenantId) {
-    case AADAuthorityConstants.COMMON:
-    case AADAuthorityConstants.ORGANIZATIONS:
-    case AADAuthorityConstants.CONSUMERS:
+    case AADAuthority.COMMON:
+    case AADAuthority.ORGANIZATIONS:
+    case AADAuthority.CONSUMERS:
       return void 0;
     default:
       return tenantId;
   }
 }
 function formatAuthorityUri(authorityUri) {
-  return authorityUri.endsWith(Constants.FORWARD_SLASH) ? authorityUri : `${authorityUri}${Constants.FORWARD_SLASH}`;
+  return authorityUri.endsWith(FORWARD_SLASH) ? authorityUri : `${authorityUri}${FORWARD_SLASH}`;
 }
 function buildStaticAuthorityOptions(authOptions) {
   const rawCloudDiscoveryMetadata = authOptions.cloudDiscoveryMetadata;
@@ -35929,138 +36988,22 @@ function buildStaticAuthorityOptions(authOptions) {
   };
 }
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityFactory.mjs
+// node_modules/@azure/msal-common/dist/authority/AuthorityFactory.mjs
 async function createDiscoveredInstance(authorityUri, networkClient, cacheManager, authorityOptions, logger31, correlationId, performanceClient) {
-  performanceClient?.addQueueMeasurement(PerformanceEvents.AuthorityFactoryCreateDiscoveredInstance, correlationId);
   const authorityUriFinal = Authority.transformCIAMAuthority(formatAuthorityUri(authorityUri));
   const acquireTokenAuthority = new Authority(authorityUriFinal, networkClient, cacheManager, authorityOptions, logger31, correlationId, performanceClient);
   try {
-    await invokeAsync(acquireTokenAuthority.resolveEndpointsAsync.bind(acquireTokenAuthority), PerformanceEvents.AuthorityResolveEndpointsAsync, logger31, performanceClient, correlationId)();
+    await invokeAsync(acquireTokenAuthority.resolveEndpointsAsync.bind(acquireTokenAuthority), AuthorityResolveEndpointsAsync, logger31, performanceClient, correlationId)();
     return acquireTokenAuthority;
   } catch (e) {
     throw createClientAuthError(endpointResolutionError);
   }
 }
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ServerError.mjs
-var ServerError = class _ServerError extends AuthError {
-  constructor(errorCode, errorMessage, subError, errorNo, status) {
-    super(errorCode, errorMessage, subError);
-    this.name = "ServerError";
-    this.errorNo = errorNo;
-    this.status = status;
-    Object.setPrototypeOf(this, _ServerError.prototype);
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/network/RequestThumbprint.mjs
-function getRequestThumbprint(clientId, request5, homeAccountId) {
-  return {
-    clientId,
-    authority: request5.authority,
-    scopes: request5.scopes,
-    homeAccountIdentifier: homeAccountId,
-    claims: request5.claims,
-    authenticationScheme: request5.authenticationScheme,
-    resourceRequestMethod: request5.resourceRequestMethod,
-    resourceRequestUri: request5.resourceRequestUri,
-    shrClaims: request5.shrClaims,
-    sshKid: request5.sshKid,
-    embeddedClientId: request5.embeddedClientId || request5.tokenBodyParameters?.clientId
-  };
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/network/ThrottlingUtils.mjs
-var ThrottlingUtils = class _ThrottlingUtils {
-  /**
-   * Prepares a RequestThumbprint to be stored as a key.
-   * @param thumbprint
-   */
-  static generateThrottlingStorageKey(thumbprint) {
-    return `${ThrottlingConstants.THROTTLING_PREFIX}.${JSON.stringify(thumbprint)}`;
-  }
-  /**
-   * Performs necessary throttling checks before a network request.
-   * @param cacheManager
-   * @param thumbprint
-   */
-  static preProcess(cacheManager, thumbprint) {
-    const key = _ThrottlingUtils.generateThrottlingStorageKey(thumbprint);
-    const value = cacheManager.getThrottlingCache(key);
-    if (value) {
-      if (value.throttleTime < Date.now()) {
-        cacheManager.removeItem(key);
-        return;
-      }
-      throw new ServerError(value.errorCodes?.join(" ") || Constants.EMPTY_STRING, value.errorMessage, value.subError);
-    }
-  }
-  /**
-   * Performs necessary throttling checks after a network request.
-   * @param cacheManager
-   * @param thumbprint
-   * @param response
-   */
-  static postProcess(cacheManager, thumbprint, response) {
-    if (_ThrottlingUtils.checkResponseStatus(response) || _ThrottlingUtils.checkResponseForRetryAfter(response)) {
-      const thumbprintValue = {
-        throttleTime: _ThrottlingUtils.calculateThrottleTime(parseInt(response.headers[HeaderNames.RETRY_AFTER])),
-        error: response.body.error,
-        errorCodes: response.body.error_codes,
-        errorMessage: response.body.error_description,
-        subError: response.body.suberror
-      };
-      cacheManager.setThrottlingCache(_ThrottlingUtils.generateThrottlingStorageKey(thumbprint), thumbprintValue);
-    }
-  }
-  /**
-   * Checks a NetworkResponse object's status codes against 429 or 5xx
-   * @param response
-   */
-  static checkResponseStatus(response) {
-    return response.status === 429 || response.status >= 500 && response.status < 600;
-  }
-  /**
-   * Checks a NetworkResponse object's RetryAfter header
-   * @param response
-   */
-  static checkResponseForRetryAfter(response) {
-    if (response.headers) {
-      return response.headers.hasOwnProperty(HeaderNames.RETRY_AFTER) && (response.status < 200 || response.status >= 300);
-    }
-    return false;
-  }
-  /**
-   * Calculates the Unix-time value for a throttle to expire given throttleTime in seconds.
-   * @param throttleTime
-   */
-  static calculateThrottleTime(throttleTime) {
-    const time = throttleTime <= 0 ? 0 : throttleTime;
-    const currentSeconds = Date.now() / 1e3;
-    return Math.floor(Math.min(currentSeconds + (time || ThrottlingConstants.DEFAULT_THROTTLE_TIME_SECONDS), currentSeconds + ThrottlingConstants.DEFAULT_MAX_THROTTLE_TIME_SECONDS) * 1e3);
-  }
-  static removeThrottle(cacheManager, clientId, request5, homeAccountIdentifier) {
-    const thumbprint = getRequestThumbprint(clientId, request5, homeAccountIdentifier);
-    const key = this.generateThrottlingStorageKey(thumbprint);
-    cacheManager.removeItem(key);
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/NetworkError.mjs
-var NetworkError = class _NetworkError extends AuthError {
-  constructor(error2, httpStatus, responseHeaders) {
-    super(error2.errorCode, error2.errorMessage, error2.subError);
-    Object.setPrototypeOf(this, _NetworkError.prototype);
-    this.name = "NetworkError";
-    this.error = error2;
-    this.httpStatus = httpStatus;
-    this.responseHeaders = responseHeaders;
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/client/BaseClient.mjs
-var BaseClient = class {
+// node_modules/@azure/msal-common/dist/client/AuthorizationCodeClient.mjs
+var AuthorizationCodeClient = class {
   constructor(configuration, performanceClient) {
+    this.includeRedirectUri = true;
     this.config = buildClientConfiguration(configuration);
     this.logger = new Logger(this.config.loggerOptions, name, version);
     this.cryptoUtils = this.config.cryptoInterface;
@@ -36069,682 +37012,6 @@ var BaseClient = class {
     this.serverTelemetryManager = this.config.serverTelemetryManager;
     this.authority = this.config.authOptions.authority;
     this.performanceClient = performanceClient;
-  }
-  /**
-   * Creates default headers for requests to token endpoint
-   */
-  createTokenRequestHeaders(ccsCred) {
-    const headers = {};
-    headers[HeaderNames.CONTENT_TYPE] = Constants.URL_FORM_CONTENT_TYPE;
-    if (!this.config.systemOptions.preventCorsPreflight && ccsCred) {
-      switch (ccsCred.type) {
-        case CcsCredentialType.HOME_ACCOUNT_ID:
-          try {
-            const clientInfo = buildClientInfoFromHomeAccountId(ccsCred.credential);
-            headers[HeaderNames.CCS_HEADER] = `Oid:${clientInfo.uid}@${clientInfo.utid}`;
-          } catch (e) {
-            this.logger.verbose("Could not parse home account ID for CCS Header: " + e);
-          }
-          break;
-        case CcsCredentialType.UPN:
-          headers[HeaderNames.CCS_HEADER] = `UPN: ${ccsCred.credential}`;
-          break;
-      }
-    }
-    return headers;
-  }
-  /**
-   * Http post to token endpoint
-   * @param tokenEndpoint
-   * @param queryString
-   * @param headers
-   * @param thumbprint
-   */
-  async executePostToTokenEndpoint(tokenEndpoint, queryString, headers, thumbprint, correlationId, queuedEvent) {
-    if (queuedEvent) {
-      this.performanceClient?.addQueueMeasurement(queuedEvent, correlationId);
-    }
-    const response = await this.sendPostRequest(thumbprint, tokenEndpoint, { body: queryString, headers }, correlationId);
-    if (this.config.serverTelemetryManager && response.status < 500 && response.status !== 429) {
-      this.config.serverTelemetryManager.clearTelemetryCache();
-    }
-    return response;
-  }
-  /**
-   * Wraps sendPostRequestAsync with necessary preflight and postflight logic
-   * @param thumbprint - Request thumbprint for throttling
-   * @param tokenEndpoint - Endpoint to make the POST to
-   * @param options - Body and Headers to include on the POST request
-   * @param correlationId - CorrelationId for telemetry
-   */
-  async sendPostRequest(thumbprint, tokenEndpoint, options, correlationId) {
-    ThrottlingUtils.preProcess(this.cacheManager, thumbprint);
-    let response;
-    try {
-      response = await invokeAsync(this.networkClient.sendPostRequestAsync.bind(this.networkClient), PerformanceEvents.NetworkClientSendPostRequestAsync, this.logger, this.performanceClient, correlationId)(tokenEndpoint, options);
-      const responseHeaders = response.headers || {};
-      this.performanceClient?.addFields({
-        refreshTokenSize: response.body.refresh_token?.length || 0,
-        httpVerToken: responseHeaders[HeaderNames.X_MS_HTTP_VERSION] || "",
-        requestId: responseHeaders[HeaderNames.X_MS_REQUEST_ID] || ""
-      }, correlationId);
-    } catch (e) {
-      if (e instanceof NetworkError) {
-        const responseHeaders = e.responseHeaders;
-        if (responseHeaders) {
-          this.performanceClient?.addFields({
-            httpVerToken: responseHeaders[HeaderNames.X_MS_HTTP_VERSION] || "",
-            requestId: responseHeaders[HeaderNames.X_MS_REQUEST_ID] || "",
-            contentTypeHeader: responseHeaders[HeaderNames.CONTENT_TYPE] || void 0,
-            contentLengthHeader: responseHeaders[HeaderNames.CONTENT_LENGTH] || void 0,
-            httpStatus: e.httpStatus
-          }, correlationId);
-        }
-        throw e.error;
-      }
-      if (e instanceof AuthError) {
-        throw e;
-      } else {
-        throw createClientAuthError(networkError);
-      }
-    }
-    ThrottlingUtils.postProcess(this.cacheManager, thumbprint, response);
-    return response;
-  }
-  /**
-   * Updates the authority object of the client. Endpoint discovery must be completed.
-   * @param updatedAuthority
-   */
-  async updateAuthority(cloudInstanceHostname, correlationId) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.UpdateTokenEndpointAuthority, correlationId);
-    const cloudInstanceAuthorityUri = `https://${cloudInstanceHostname}/${this.authority.tenant}/`;
-    const cloudInstanceAuthority = await createDiscoveredInstance(cloudInstanceAuthorityUri, this.networkClient, this.cacheManager, this.authority.options, this.logger, correlationId, this.performanceClient);
-    this.authority = cloudInstanceAuthority;
-  }
-  /**
-   * Creates query string for the /token request
-   * @param request
-   */
-  createTokenQueryParameters(request5) {
-    const parameters = /* @__PURE__ */ new Map();
-    if (request5.embeddedClientId) {
-      addBrokerParameters(parameters, this.config.authOptions.clientId, this.config.authOptions.redirectUri);
-    }
-    if (request5.tokenQueryParameters) {
-      addExtraQueryParameters(parameters, request5.tokenQueryParameters);
-    }
-    addCorrelationId(parameters, request5.correlationId);
-    instrumentBrokerParams(parameters, request5.correlationId, this.performanceClient);
-    return mapToQueryString(parameters);
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/InteractionRequiredAuthErrorCodes.mjs
-var InteractionRequiredAuthErrorCodes_exports = {};
-__export(InteractionRequiredAuthErrorCodes_exports, {
-  badToken: () => badToken,
-  consentRequired: () => consentRequired,
-  interactionRequired: () => interactionRequired,
-  loginRequired: () => loginRequired,
-  nativeAccountUnavailable: () => nativeAccountUnavailable,
-  noTokensFound: () => noTokensFound,
-  refreshTokenExpired: () => refreshTokenExpired
-});
-var noTokensFound = "no_tokens_found";
-var nativeAccountUnavailable = "native_account_unavailable";
-var refreshTokenExpired = "refresh_token_expired";
-var interactionRequired = "interaction_required";
-var consentRequired = "consent_required";
-var loginRequired = "login_required";
-var badToken = "bad_token";
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/InteractionRequiredAuthError.mjs
-var InteractionRequiredServerErrorMessage = [
-  interactionRequired,
-  consentRequired,
-  loginRequired,
-  badToken
-];
-var InteractionRequiredAuthSubErrorMessage = [
-  "message_only",
-  "additional_action",
-  "basic_action",
-  "user_password_expired",
-  "consent_required",
-  "bad_token"
-];
-var InteractionRequiredAuthErrorMessages = {
-  [noTokensFound]: "No refresh token found in the cache. Please sign-in.",
-  [nativeAccountUnavailable]: "The requested account is not available in the native broker. It may have been deleted or logged out. Please sign-in again using an interactive API.",
-  [refreshTokenExpired]: "Refresh token has expired.",
-  [badToken]: "Identity provider returned bad_token due to an expired or invalid refresh token. Please invoke an interactive API to resolve."
-};
-var InteractionRequiredAuthErrorMessage = {
-  noTokensFoundError: {
-    code: noTokensFound,
-    desc: InteractionRequiredAuthErrorMessages[noTokensFound]
-  },
-  native_account_unavailable: {
-    code: nativeAccountUnavailable,
-    desc: InteractionRequiredAuthErrorMessages[nativeAccountUnavailable]
-  },
-  bad_token: {
-    code: badToken,
-    desc: InteractionRequiredAuthErrorMessages[badToken]
-  }
-};
-var InteractionRequiredAuthError = class _InteractionRequiredAuthError extends AuthError {
-  constructor(errorCode, errorMessage, subError, timestamp, traceId, correlationId, claims, errorNo) {
-    super(errorCode, errorMessage, subError);
-    Object.setPrototypeOf(this, _InteractionRequiredAuthError.prototype);
-    this.timestamp = timestamp || Constants.EMPTY_STRING;
-    this.traceId = traceId || Constants.EMPTY_STRING;
-    this.correlationId = correlationId || Constants.EMPTY_STRING;
-    this.claims = claims || Constants.EMPTY_STRING;
-    this.name = "InteractionRequiredAuthError";
-    this.errorNo = errorNo;
-  }
-};
-function isInteractionRequiredError(errorCode, errorString, subError) {
-  const isInteractionRequiredErrorCode = !!errorCode && InteractionRequiredServerErrorMessage.indexOf(errorCode) > -1;
-  const isInteractionRequiredSubError = !!subError && InteractionRequiredAuthSubErrorMessage.indexOf(subError) > -1;
-  const isInteractionRequiredErrorDesc = !!errorString && InteractionRequiredServerErrorMessage.some((irErrorCode) => {
-    return errorString.indexOf(irErrorCode) > -1;
-  });
-  return isInteractionRequiredErrorCode || isInteractionRequiredErrorDesc || isInteractionRequiredSubError;
-}
-function createInteractionRequiredAuthError(errorCode) {
-  return new InteractionRequiredAuthError(errorCode, InteractionRequiredAuthErrorMessages[errorCode]);
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/ProtocolUtils.mjs
-var ProtocolUtils = class _ProtocolUtils {
-  /**
-   * Appends user state with random guid, or returns random guid.
-   * @param userState
-   * @param randomGuid
-   */
-  static setRequestState(cryptoObj, userState, meta) {
-    const libraryState = _ProtocolUtils.generateLibraryState(cryptoObj, meta);
-    return userState ? `${libraryState}${Constants.RESOURCE_DELIM}${userState}` : libraryState;
-  }
-  /**
-   * Generates the state value used by the common library.
-   * @param randomGuid
-   * @param cryptoObj
-   */
-  static generateLibraryState(cryptoObj, meta) {
-    if (!cryptoObj) {
-      throw createClientAuthError(noCryptoObject);
-    }
-    const stateObj = {
-      id: cryptoObj.createNewGuid()
-    };
-    if (meta) {
-      stateObj.meta = meta;
-    }
-    const stateString = JSON.stringify(stateObj);
-    return cryptoObj.base64Encode(stateString);
-  }
-  /**
-   * Parses the state into the RequestStateObject, which contains the LibraryState info and the state passed by the user.
-   * @param state
-   * @param cryptoObj
-   */
-  static parseRequestState(cryptoObj, state3) {
-    if (!cryptoObj) {
-      throw createClientAuthError(noCryptoObject);
-    }
-    if (!state3) {
-      throw createClientAuthError(invalidState);
-    }
-    try {
-      const splitState = state3.split(Constants.RESOURCE_DELIM);
-      const libraryState = splitState[0];
-      const userState = splitState.length > 1 ? splitState.slice(1).join(Constants.RESOURCE_DELIM) : Constants.EMPTY_STRING;
-      const libraryStateString = cryptoObj.base64Decode(libraryState);
-      const libraryStateObj = JSON.parse(libraryStateString);
-      return {
-        userRequestState: userState || Constants.EMPTY_STRING,
-        libraryState: libraryStateObj
-      };
-    } catch (e) {
-      throw createClientAuthError(invalidState);
-    }
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/crypto/PopTokenGenerator.mjs
-var KeyLocation = {
-  SW: "sw",
-  UHW: "uhw"
-};
-var PopTokenGenerator = class {
-  constructor(cryptoUtils, performanceClient) {
-    this.cryptoUtils = cryptoUtils;
-    this.performanceClient = performanceClient;
-  }
-  /**
-   * Generates the req_cnf validated at the RP in the POP protocol for SHR parameters
-   * and returns an object containing the keyid, the full req_cnf string and the req_cnf string hash
-   * @param request
-   * @returns
-   */
-  async generateCnf(request5, logger31) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.PopTokenGenerateCnf, request5.correlationId);
-    const reqCnf = await invokeAsync(this.generateKid.bind(this), PerformanceEvents.PopTokenGenerateCnf, logger31, this.performanceClient, request5.correlationId)(request5);
-    const reqCnfString = this.cryptoUtils.base64UrlEncode(JSON.stringify(reqCnf));
-    return {
-      kid: reqCnf.kid,
-      reqCnfString
-    };
-  }
-  /**
-   * Generates key_id for a SHR token request
-   * @param request
-   * @returns
-   */
-  async generateKid(request5) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.PopTokenGenerateKid, request5.correlationId);
-    const kidThumbprint = await this.cryptoUtils.getPublicKeyThumbprint(request5);
-    return {
-      kid: kidThumbprint,
-      xms_ksl: KeyLocation.SW
-    };
-  }
-  /**
-   * Signs the POP access_token with the local generated key-pair
-   * @param accessToken
-   * @param request
-   * @returns
-   */
-  async signPopToken(accessToken, keyId, request5) {
-    return this.signPayload(accessToken, keyId, request5);
-  }
-  /**
-   * Utility function to generate the signed JWT for an access_token
-   * @param payload
-   * @param kid
-   * @param request
-   * @param claims
-   * @returns
-   */
-  async signPayload(payload, keyId, request5, claims) {
-    const { resourceRequestMethod, resourceRequestUri, shrClaims, shrNonce, shrOptions } = request5;
-    const resourceUrlString = resourceRequestUri ? new UrlString(resourceRequestUri) : void 0;
-    const resourceUrlComponents = resourceUrlString?.getUrlComponents();
-    return this.cryptoUtils.signJwt({
-      at: payload,
-      ts: nowSeconds(),
-      m: resourceRequestMethod?.toUpperCase(),
-      u: resourceUrlComponents?.HostNameAndPort,
-      nonce: shrNonce || this.cryptoUtils.createNewGuid(),
-      p: resourceUrlComponents?.AbsolutePath,
-      q: resourceUrlComponents?.QueryString ? [[], resourceUrlComponents.QueryString] : void 0,
-      client_claims: shrClaims || void 0,
-      ...claims
-    }, keyId, shrOptions, request5.correlationId);
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/persistence/TokenCacheContext.mjs
-var TokenCacheContext = class {
-  constructor(tokenCache, hasChanged) {
-    this.cache = tokenCache;
-    this.hasChanged = hasChanged;
-  }
-  /**
-   * boolean which indicates the changes in cache
-   */
-  get cacheHasChanged() {
-    return this.hasChanged;
-  }
-  /**
-   * function to retrieve the token cache
-   */
-  get tokenCache() {
-    return this.cache;
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/response/ResponseHandler.mjs
-var ResponseHandler = class _ResponseHandler {
-  constructor(clientId, cacheStorage, cryptoObj, logger31, serializableCache, persistencePlugin, performanceClient) {
-    this.clientId = clientId;
-    this.cacheStorage = cacheStorage;
-    this.cryptoObj = cryptoObj;
-    this.logger = logger31;
-    this.serializableCache = serializableCache;
-    this.persistencePlugin = persistencePlugin;
-    this.performanceClient = performanceClient;
-  }
-  /**
-   * Function which validates server authorization token response.
-   * @param serverResponse
-   * @param refreshAccessToken
-   */
-  validateTokenResponse(serverResponse, refreshAccessToken) {
-    if (serverResponse.error || serverResponse.error_description || serverResponse.suberror) {
-      const errString = `Error(s): ${serverResponse.error_codes || Constants.NOT_AVAILABLE} - Timestamp: ${serverResponse.timestamp || Constants.NOT_AVAILABLE} - Description: ${serverResponse.error_description || Constants.NOT_AVAILABLE} - Correlation ID: ${serverResponse.correlation_id || Constants.NOT_AVAILABLE} - Trace ID: ${serverResponse.trace_id || Constants.NOT_AVAILABLE}`;
-      const serverErrorNo = serverResponse.error_codes?.length ? serverResponse.error_codes[0] : void 0;
-      const serverError = new ServerError(serverResponse.error, errString, serverResponse.suberror, serverErrorNo, serverResponse.status);
-      if (refreshAccessToken && serverResponse.status && serverResponse.status >= HttpStatus.SERVER_ERROR_RANGE_START && serverResponse.status <= HttpStatus.SERVER_ERROR_RANGE_END) {
-        this.logger.warning(`executeTokenRequest:validateTokenResponse - AAD is currently unavailable and the access token is unable to be refreshed.
-${serverError}`);
-        return;
-      } else if (refreshAccessToken && serverResponse.status && serverResponse.status >= HttpStatus.CLIENT_ERROR_RANGE_START && serverResponse.status <= HttpStatus.CLIENT_ERROR_RANGE_END) {
-        this.logger.warning(`executeTokenRequest:validateTokenResponse - AAD is currently available but is unable to refresh the access token.
-${serverError}`);
-        return;
-      }
-      if (isInteractionRequiredError(serverResponse.error, serverResponse.error_description, serverResponse.suberror)) {
-        throw new InteractionRequiredAuthError(serverResponse.error, serverResponse.error_description, serverResponse.suberror, serverResponse.timestamp || Constants.EMPTY_STRING, serverResponse.trace_id || Constants.EMPTY_STRING, serverResponse.correlation_id || Constants.EMPTY_STRING, serverResponse.claims || Constants.EMPTY_STRING, serverErrorNo);
-      }
-      throw serverError;
-    }
-  }
-  /**
-   * Returns a constructed token response based on given string. Also manages the cache updates and cleanups.
-   * @param serverTokenResponse
-   * @param authority
-   */
-  async handleServerTokenResponse(serverTokenResponse, authority, reqTimestamp, request5, authCodePayload, userAssertionHash, handlingRefreshTokenResponse, forceCacheRefreshTokenResponse, serverRequestId) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.HandleServerTokenResponse, serverTokenResponse.correlation_id);
-    let idTokenClaims;
-    if (serverTokenResponse.id_token) {
-      idTokenClaims = extractTokenClaims(serverTokenResponse.id_token || Constants.EMPTY_STRING, this.cryptoObj.base64Decode);
-      if (authCodePayload && authCodePayload.nonce) {
-        if (idTokenClaims.nonce !== authCodePayload.nonce) {
-          throw createClientAuthError(nonceMismatch);
-        }
-      }
-      if (request5.maxAge || request5.maxAge === 0) {
-        const authTime = idTokenClaims.auth_time;
-        if (!authTime) {
-          throw createClientAuthError(authTimeNotFound);
-        }
-        checkMaxAge(authTime, request5.maxAge);
-      }
-    }
-    this.homeAccountIdentifier = AccountEntity.generateHomeAccountId(serverTokenResponse.client_info || Constants.EMPTY_STRING, authority.authorityType, this.logger, this.cryptoObj, idTokenClaims);
-    let requestStateObj;
-    if (!!authCodePayload && !!authCodePayload.state) {
-      requestStateObj = ProtocolUtils.parseRequestState(this.cryptoObj, authCodePayload.state);
-    }
-    serverTokenResponse.key_id = serverTokenResponse.key_id || request5.sshKid || void 0;
-    const cacheRecord = this.generateCacheRecord(serverTokenResponse, authority, reqTimestamp, request5, idTokenClaims, userAssertionHash, authCodePayload);
-    let cacheContext;
-    try {
-      if (this.persistencePlugin && this.serializableCache) {
-        this.logger.verbose("Persistence enabled, calling beforeCacheAccess");
-        cacheContext = new TokenCacheContext(this.serializableCache, true);
-        await this.persistencePlugin.beforeCacheAccess(cacheContext);
-      }
-      if (handlingRefreshTokenResponse && !forceCacheRefreshTokenResponse && cacheRecord.account) {
-        const key = cacheRecord.account.generateAccountKey();
-        const account = this.cacheStorage.getAccount(key);
-        if (!account) {
-          this.logger.warning("Account used to refresh tokens not in persistence, refreshed tokens will not be stored in the cache");
-          return await _ResponseHandler.generateAuthenticationResult(this.cryptoObj, authority, cacheRecord, false, request5, idTokenClaims, requestStateObj, void 0, serverRequestId);
-        }
-      }
-      await this.cacheStorage.saveCacheRecord(cacheRecord, request5.correlationId, request5.storeInCache);
-    } finally {
-      if (this.persistencePlugin && this.serializableCache && cacheContext) {
-        this.logger.verbose("Persistence enabled, calling afterCacheAccess");
-        await this.persistencePlugin.afterCacheAccess(cacheContext);
-      }
-    }
-    return _ResponseHandler.generateAuthenticationResult(this.cryptoObj, authority, cacheRecord, false, request5, idTokenClaims, requestStateObj, serverTokenResponse, serverRequestId);
-  }
-  /**
-   * Generates CacheRecord
-   * @param serverTokenResponse
-   * @param idTokenObj
-   * @param authority
-   */
-  generateCacheRecord(serverTokenResponse, authority, reqTimestamp, request5, idTokenClaims, userAssertionHash, authCodePayload) {
-    const env = authority.getPreferredCache();
-    if (!env) {
-      throw createClientAuthError(invalidCacheEnvironment);
-    }
-    const claimsTenantId = getTenantIdFromIdTokenClaims(idTokenClaims);
-    let cachedIdToken;
-    let cachedAccount;
-    if (serverTokenResponse.id_token && !!idTokenClaims) {
-      cachedIdToken = createIdTokenEntity(this.homeAccountIdentifier, env, serverTokenResponse.id_token, this.clientId, claimsTenantId || "");
-      cachedAccount = buildAccountToCache(
-        this.cacheStorage,
-        authority,
-        this.homeAccountIdentifier,
-        this.cryptoObj.base64Decode,
-        idTokenClaims,
-        serverTokenResponse.client_info,
-        env,
-        claimsTenantId,
-        authCodePayload,
-        void 0,
-        // nativeAccountId
-        this.logger
-      );
-    }
-    let cachedAccessToken = null;
-    if (serverTokenResponse.access_token) {
-      const responseScopes = serverTokenResponse.scope ? ScopeSet.fromString(serverTokenResponse.scope) : new ScopeSet(request5.scopes || []);
-      const expiresIn = (typeof serverTokenResponse.expires_in === "string" ? parseInt(serverTokenResponse.expires_in, 10) : serverTokenResponse.expires_in) || 0;
-      const extExpiresIn = (typeof serverTokenResponse.ext_expires_in === "string" ? parseInt(serverTokenResponse.ext_expires_in, 10) : serverTokenResponse.ext_expires_in) || 0;
-      const refreshIn = (typeof serverTokenResponse.refresh_in === "string" ? parseInt(serverTokenResponse.refresh_in, 10) : serverTokenResponse.refresh_in) || void 0;
-      const tokenExpirationSeconds = reqTimestamp + expiresIn;
-      const extendedTokenExpirationSeconds = tokenExpirationSeconds + extExpiresIn;
-      const refreshOnSeconds = refreshIn && refreshIn > 0 ? reqTimestamp + refreshIn : void 0;
-      cachedAccessToken = createAccessTokenEntity(this.homeAccountIdentifier, env, serverTokenResponse.access_token, this.clientId, claimsTenantId || authority.tenant || "", responseScopes.printScopes(), tokenExpirationSeconds, extendedTokenExpirationSeconds, this.cryptoObj.base64Decode, refreshOnSeconds, serverTokenResponse.token_type, userAssertionHash, serverTokenResponse.key_id, request5.claims, request5.requestedClaimsHash);
-    }
-    let cachedRefreshToken = null;
-    if (serverTokenResponse.refresh_token) {
-      let rtExpiresOn;
-      if (serverTokenResponse.refresh_token_expires_in) {
-        const rtExpiresIn = typeof serverTokenResponse.refresh_token_expires_in === "string" ? parseInt(serverTokenResponse.refresh_token_expires_in, 10) : serverTokenResponse.refresh_token_expires_in;
-        rtExpiresOn = reqTimestamp + rtExpiresIn;
-      }
-      cachedRefreshToken = createRefreshTokenEntity(this.homeAccountIdentifier, env, serverTokenResponse.refresh_token, this.clientId, serverTokenResponse.foci, userAssertionHash, rtExpiresOn);
-    }
-    let cachedAppMetadata = null;
-    if (serverTokenResponse.foci) {
-      cachedAppMetadata = {
-        clientId: this.clientId,
-        environment: env,
-        familyId: serverTokenResponse.foci
-      };
-    }
-    return {
-      account: cachedAccount,
-      idToken: cachedIdToken,
-      accessToken: cachedAccessToken,
-      refreshToken: cachedRefreshToken,
-      appMetadata: cachedAppMetadata
-    };
-  }
-  /**
-   * Creates an @AuthenticationResult from @CacheRecord , @IdToken , and a boolean that states whether or not the result is from cache.
-   *
-   * Optionally takes a state string that is set as-is in the response.
-   *
-   * @param cacheRecord
-   * @param idTokenObj
-   * @param fromTokenCache
-   * @param stateString
-   */
-  static async generateAuthenticationResult(cryptoObj, authority, cacheRecord, fromTokenCache, request5, idTokenClaims, requestState, serverTokenResponse, requestId) {
-    let accessToken = Constants.EMPTY_STRING;
-    let responseScopes = [];
-    let expiresOn = null;
-    let extExpiresOn;
-    let refreshOn;
-    let familyId = Constants.EMPTY_STRING;
-    if (cacheRecord.accessToken) {
-      if (cacheRecord.accessToken.tokenType === AuthenticationScheme.POP && !request5.popKid) {
-        const popTokenGenerator = new PopTokenGenerator(cryptoObj);
-        const { secret, keyId } = cacheRecord.accessToken;
-        if (!keyId) {
-          throw createClientAuthError(keyIdMissing);
-        }
-        accessToken = await popTokenGenerator.signPopToken(secret, keyId, request5);
-      } else {
-        accessToken = cacheRecord.accessToken.secret;
-      }
-      responseScopes = ScopeSet.fromString(cacheRecord.accessToken.target).asArray();
-      expiresOn = toDateFromSeconds(cacheRecord.accessToken.expiresOn);
-      extExpiresOn = toDateFromSeconds(cacheRecord.accessToken.extendedExpiresOn);
-      if (cacheRecord.accessToken.refreshOn) {
-        refreshOn = toDateFromSeconds(cacheRecord.accessToken.refreshOn);
-      }
-    }
-    if (cacheRecord.appMetadata) {
-      familyId = cacheRecord.appMetadata.familyId === THE_FAMILY_ID ? THE_FAMILY_ID : "";
-    }
-    const uid = idTokenClaims?.oid || idTokenClaims?.sub || "";
-    const tid = idTokenClaims?.tid || "";
-    if (serverTokenResponse?.spa_accountid && !!cacheRecord.account) {
-      cacheRecord.account.nativeAccountId = serverTokenResponse?.spa_accountid;
-    }
-    const accountInfo = cacheRecord.account ? updateAccountTenantProfileData(
-      cacheRecord.account.getAccountInfo(),
-      void 0,
-      // tenantProfile optional
-      idTokenClaims,
-      cacheRecord.idToken?.secret
-    ) : null;
-    return {
-      authority: authority.canonicalAuthority,
-      uniqueId: uid,
-      tenantId: tid,
-      scopes: responseScopes,
-      account: accountInfo,
-      idToken: cacheRecord?.idToken?.secret || "",
-      idTokenClaims: idTokenClaims || {},
-      accessToken,
-      fromCache: fromTokenCache,
-      expiresOn,
-      extExpiresOn,
-      refreshOn,
-      correlationId: request5.correlationId,
-      requestId: requestId || Constants.EMPTY_STRING,
-      familyId,
-      tokenType: cacheRecord.accessToken?.tokenType || Constants.EMPTY_STRING,
-      state: requestState ? requestState.userRequestState : Constants.EMPTY_STRING,
-      cloudGraphHostName: cacheRecord.account?.cloudGraphHostName || Constants.EMPTY_STRING,
-      msGraphHost: cacheRecord.account?.msGraphHost || Constants.EMPTY_STRING,
-      code: serverTokenResponse?.spa_code,
-      fromNativeBroker: false
-    };
-  }
-};
-function buildAccountToCache(cacheStorage, authority, homeAccountId, base64Decode, idTokenClaims, clientInfo, environment, claimsTenantId, authCodePayload, nativeAccountId, logger31) {
-  logger31?.verbose("setCachedAccount called");
-  const accountKeys = cacheStorage.getAccountKeys();
-  const baseAccountKey = accountKeys.find((accountKey) => {
-    return accountKey.startsWith(homeAccountId);
-  });
-  let cachedAccount = null;
-  if (baseAccountKey) {
-    cachedAccount = cacheStorage.getAccount(baseAccountKey);
-  }
-  const baseAccount = cachedAccount || AccountEntity.createAccount({
-    homeAccountId,
-    idTokenClaims,
-    clientInfo,
-    environment,
-    cloudGraphHostName: authCodePayload?.cloud_graph_host_name,
-    msGraphHost: authCodePayload?.msgraph_host,
-    nativeAccountId
-  }, authority, base64Decode);
-  const tenantProfiles = baseAccount.tenantProfiles || [];
-  const tenantId = claimsTenantId || baseAccount.realm;
-  if (tenantId && !tenantProfiles.find((tenantProfile) => {
-    return tenantProfile.tenantId === tenantId;
-  })) {
-    const newTenantProfile = buildTenantProfile(homeAccountId, baseAccount.localAccountId, tenantId, idTokenClaims);
-    tenantProfiles.push(newTenantProfile);
-  }
-  baseAccount.tenantProfiles = tenantProfiles;
-  return baseAccount;
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/request/RequestValidator.mjs
-var RequestValidator = class {
-  /**
-   * Utility to check if the `redirectUri` in the request is a non-null value
-   * @param redirectUri
-   */
-  static validateRedirectUri(redirectUri) {
-    if (!redirectUri) {
-      throw createClientConfigurationError(redirectUriEmpty);
-    }
-  }
-  /**
-   * Utility to validate prompt sent by the user in the request
-   * @param prompt
-   */
-  static validatePrompt(prompt) {
-    const promptValues = [];
-    for (const value in PromptValue) {
-      promptValues.push(PromptValue[value]);
-    }
-    if (promptValues.indexOf(prompt) < 0) {
-      throw createClientConfigurationError(invalidPromptValue);
-    }
-  }
-  static validateClaims(claims) {
-    try {
-      JSON.parse(claims);
-    } catch (e) {
-      throw createClientConfigurationError(invalidClaims);
-    }
-  }
-  /**
-   * Utility to validate code_challenge and code_challenge_method
-   * @param codeChallenge
-   * @param codeChallengeMethod
-   */
-  static validateCodeChallengeParams(codeChallenge, codeChallengeMethod) {
-    if (!codeChallenge || !codeChallengeMethod) {
-      throw createClientConfigurationError(pkceParamsMissing);
-    } else {
-      this.validateCodeChallengeMethod(codeChallengeMethod);
-    }
-  }
-  /**
-   * Utility to validate code_challenge_method
-   * @param codeChallengeMethod
-   */
-  static validateCodeChallengeMethod(codeChallengeMethod) {
-    if ([
-      CodeChallengeMethodValues.PLAIN,
-      CodeChallengeMethodValues.S256
-    ].indexOf(codeChallengeMethod) < 0) {
-      throw createClientConfigurationError(invalidCodeChallengeMethod);
-    }
-  }
-};
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/ClientAssertionUtils.mjs
-async function getClientAssertion(clientAssertion, clientId, tokenEndpoint) {
-  if (typeof clientAssertion === "string") {
-    return clientAssertion;
-  } else {
-    const config = {
-      clientId,
-      tokenEndpoint
-    };
-    return clientAssertion(config);
-  }
-}
-
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/client/AuthorizationCodeClient.mjs
-var AuthorizationCodeClient = class extends BaseClient {
-  constructor(configuration, performanceClient) {
-    super(configuration, performanceClient);
-    this.includeRedirectUri = true;
     this.oidcDefaultScopes = this.config.authOptions.authority.options.OIDCOptions?.defaultScopes;
   }
   /**
@@ -36752,17 +37019,19 @@ var AuthorizationCodeClient = class extends BaseClient {
    * authorization_code_grant
    * @param request
    */
-  async acquireToken(request5, authCodePayload) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthClientAcquireToken, request5.correlationId);
+  async acquireToken(request5, apiId, authCodePayload) {
     if (!request5.code) {
       throw createClientAuthError(requestCannotBeMade);
     }
+    if (authCodePayload && authCodePayload.cloud_instance_host_name) {
+      await invokeAsync(this.updateTokenEndpointAuthority.bind(this), UpdateTokenEndpointAuthority, this.logger, this.performanceClient, request5.correlationId)(authCodePayload.cloud_instance_host_name, request5.correlationId);
+    }
     const reqTimestamp = nowSeconds();
-    const response = await invokeAsync(this.executeTokenRequest.bind(this), PerformanceEvents.AuthClientExecuteTokenRequest, this.logger, this.performanceClient, request5.correlationId)(this.authority, request5);
+    const response = await invokeAsync(this.executeTokenRequest.bind(this), AuthClientExecuteTokenRequest, this.logger, this.performanceClient, request5.correlationId)(this.authority, request5, this.serverTelemetryManager);
     const requestId = response.headers?.[HeaderNames.X_MS_REQUEST_ID];
-    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.config.serializableCache, this.config.persistencePlugin, this.performanceClient);
-    responseHandler.validateTokenResponse(response.body);
-    return invokeAsync(responseHandler.handleServerTokenResponse.bind(responseHandler), PerformanceEvents.HandleServerTokenResponse, this.logger, this.performanceClient, request5.correlationId)(response.body, this.authority, reqTimestamp, request5, authCodePayload, void 0, void 0, void 0, requestId);
+    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.performanceClient, this.config.serializableCache, this.config.persistencePlugin);
+    responseHandler.validateTokenResponse(response.body, request5.correlationId);
+    return invokeAsync(responseHandler.handleServerTokenResponse.bind(responseHandler), HandleServerTokenResponse, this.logger, this.performanceClient, request5.correlationId)(response.body, this.authority, reqTimestamp, request5, apiId, authCodePayload, void 0, void 0, void 0, requestId);
   }
   /**
    * Used to log out the current user, and redirect the user to the postLogoutRedirectUri.
@@ -36781,41 +37050,42 @@ var AuthorizationCodeClient = class extends BaseClient {
    * @param authority
    * @param request
    */
-  async executeTokenRequest(authority, request5) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthClientExecuteTokenRequest, request5.correlationId);
-    const queryParametersString = this.createTokenQueryParameters(request5);
+  async executeTokenRequest(authority, request5, serverTelemetryManager) {
+    const queryParametersString = createTokenQueryParameters(request5, this.config.authOptions.clientId, this.config.authOptions.redirectUri, this.performanceClient);
     const endpoint = UrlString.appendQueryString(authority.tokenEndpoint, queryParametersString);
-    const requestBody = await invokeAsync(this.createTokenRequestBody.bind(this), PerformanceEvents.AuthClientCreateTokenRequestBody, this.logger, this.performanceClient, request5.correlationId)(request5);
+    const requestBody = await invokeAsync(this.createTokenRequestBody.bind(this), AuthClientCreateTokenRequestBody, this.logger, this.performanceClient, request5.correlationId)(request5);
     let ccsCredential = void 0;
     if (request5.clientInfo) {
       try {
         const clientInfo = buildClientInfo(request5.clientInfo, this.cryptoUtils.base64Decode);
         ccsCredential = {
-          credential: `${clientInfo.uid}${Separators.CLIENT_INFO_SEPARATOR}${clientInfo.utid}`,
+          credential: `${clientInfo.uid}${CLIENT_INFO_SEPARATOR}${clientInfo.utid}`,
           type: CcsCredentialType.HOME_ACCOUNT_ID
         };
       } catch (e) {
-        this.logger.verbose("Could not parse client info for CCS Header: " + e);
+        this.logger.verbose(`Could not parse client info for CCS Header: '${e}'`, request5.correlationId);
       }
     }
-    const headers = this.createTokenRequestHeaders(ccsCredential || request5.ccsCredential);
+    const headers = createTokenRequestHeaders(this.logger, this.config.systemOptions.preventCorsPreflight, ccsCredential || request5.ccsCredential);
     const thumbprint = getRequestThumbprint(this.config.authOptions.clientId, request5);
-    return invokeAsync(this.executePostToTokenEndpoint.bind(this), PerformanceEvents.AuthorizationCodeClientExecutePostToTokenEndpoint, this.logger, this.performanceClient, request5.correlationId)(endpoint, requestBody, headers, thumbprint, request5.correlationId, PerformanceEvents.AuthorizationCodeClientExecutePostToTokenEndpoint);
+    return invokeAsync(executePostToTokenEndpoint, AuthorizationCodeClientExecutePostToTokenEndpoint, this.logger, this.performanceClient, request5.correlationId)(endpoint, requestBody, headers, thumbprint, request5.correlationId, this.cacheManager, this.networkClient, this.logger, this.performanceClient, serverTelemetryManager);
   }
   /**
    * Generates a map for all the params to be sent to the service
    * @param request
    */
   async createTokenRequestBody(request5) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.AuthClientCreateTokenRequestBody, request5.correlationId);
     const parameters = /* @__PURE__ */ new Map();
-    addClientId(parameters, request5.embeddedClientId || request5.tokenBodyParameters?.[CLIENT_ID] || this.config.authOptions.clientId);
+    addClientId(parameters, request5.embeddedClientId || request5.extraParameters?.[CLIENT_ID] || this.config.authOptions.clientId);
     if (!this.includeRedirectUri) {
-      RequestValidator.validateRedirectUri(request5.redirectUri);
+      if (!request5.redirectUri) {
+        throw createClientConfigurationError(redirectUriEmpty);
+      }
     } else {
       addRedirectUri(parameters, request5.redirectUri);
     }
     addScopes(parameters, request5.scopes, true, this.oidcDefaultScopes);
+    addResource(parameters, request5.resource);
     addAuthorizationCode(parameters, request5.code);
     addLibraryInfo(parameters, this.config.libraryInfo);
     addApplicationTelemetry(parameters, this.config.telemetry.application);
@@ -36840,7 +37110,7 @@ var AuthorizationCodeClient = class extends BaseClient {
       const popTokenGenerator = new PopTokenGenerator(this.cryptoUtils, this.performanceClient);
       let reqCnfData;
       if (!request5.popKid) {
-        const generatedReqCnfData = await invokeAsync(popTokenGenerator.generateCnf.bind(popTokenGenerator), PerformanceEvents.PopTokenGenerateCnf, this.logger, this.performanceClient, request5.correlationId)(request5, this.logger);
+        const generatedReqCnfData = await invokeAsync(popTokenGenerator.generateCnf.bind(popTokenGenerator), PopTokenGenerateCnf, this.logger, this.performanceClient, request5.correlationId)(request5, this.logger);
         reqCnfData = generatedReqCnfData.reqCnfString;
       } else {
         reqCnfData = this.cryptoUtils.encodeKid(request5.popKid);
@@ -36861,11 +37131,11 @@ var AuthorizationCodeClient = class extends BaseClient {
       try {
         const clientInfo = buildClientInfo(request5.clientInfo, this.cryptoUtils.base64Decode);
         ccsCred = {
-          credential: `${clientInfo.uid}${Separators.CLIENT_INFO_SEPARATOR}${clientInfo.utid}`,
+          credential: `${clientInfo.uid}${CLIENT_INFO_SEPARATOR}${clientInfo.utid}`,
           type: CcsCredentialType.HOME_ACCOUNT_ID
         };
       } catch (e) {
-        this.logger.verbose("Could not parse client info for CCS Header: " + e);
+        this.logger.verbose(`Could not parse client info for CCS Header: '${e}'`, request5.correlationId);
       }
     } else {
       ccsCred = request5.ccsCredential;
@@ -36877,7 +37147,7 @@ var AuthorizationCodeClient = class extends BaseClient {
             const clientInfo = buildClientInfoFromHomeAccountId(ccsCred.credential);
             addCcsOid(parameters, clientInfo);
           } catch (e) {
-            this.logger.verbose("Could not parse home account ID for CCS Header: " + e);
+            this.logger.verbose(`Could not parse home account ID for CCS Header: '${e}'`, request5.correlationId);
           }
           break;
         case CcsCredentialType.UPN:
@@ -36888,11 +37158,11 @@ var AuthorizationCodeClient = class extends BaseClient {
     if (request5.embeddedClientId) {
       addBrokerParameters(parameters, this.config.authOptions.clientId, this.config.authOptions.redirectUri);
     }
-    if (request5.tokenBodyParameters) {
-      addExtraQueryParameters(parameters, request5.tokenBodyParameters);
+    if (request5.extraParameters) {
+      addExtraParameters(parameters, request5.extraParameters);
     }
-    if (request5.enableSpaAuthorizationCode && (!request5.tokenBodyParameters || !request5.tokenBodyParameters[RETURN_SPA_CODE])) {
-      addExtraQueryParameters(parameters, {
+    if (request5.enableSpaAuthorizationCode && (!request5.extraParameters || !request5.extraParameters[RETURN_SPA_CODE])) {
+      addExtraParameters(parameters, {
         [RETURN_SPA_CODE]: "1"
       });
     }
@@ -36921,71 +37191,91 @@ var AuthorizationCodeClient = class extends BaseClient {
       addLogoutHint(parameters, request5.logoutHint);
     }
     if (request5.extraQueryParameters) {
-      addExtraQueryParameters(parameters, request5.extraQueryParameters);
+      addExtraParameters(parameters, request5.extraQueryParameters);
     }
     if (this.config.authOptions.instanceAware) {
       addInstanceAware(parameters);
     }
-    return mapToQueryString(parameters, this.config.authOptions.encodeExtraQueryParams, request5.extraQueryParameters);
+    return mapToQueryString(parameters);
+  }
+  /**
+   * Updates the authority to the cloud instance provided in the authorization response
+   * @param cloudInstanceHostName - cloud instance host name from authorization code payload
+   * @param correlationId - request correlation id
+   */
+  async updateTokenEndpointAuthority(cloudInstanceHostName, correlationId) {
+    const cloudInstanceAuthorityUri = `https://${cloudInstanceHostName}/${this.authority.tenant}/`;
+    const cloudInstanceAuthority = await createDiscoveredInstance(cloudInstanceAuthorityUri, this.networkClient, this.cacheManager, this.authority.options, this.logger, correlationId, this.performanceClient);
+    this.authority = cloudInstanceAuthority;
   }
 };
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/client/RefreshTokenClient.mjs
+// node_modules/@azure/msal-common/dist/client/RefreshTokenClient.mjs
 var DEFAULT_REFRESH_TOKEN_EXPIRATION_OFFSET_SECONDS = 300;
-var RefreshTokenClient = class extends BaseClient {
+var RefreshTokenClient = class {
   constructor(configuration, performanceClient) {
-    super(configuration, performanceClient);
+    this.config = buildClientConfiguration(configuration);
+    this.logger = new Logger(this.config.loggerOptions, name, version);
+    this.cryptoUtils = this.config.cryptoInterface;
+    this.cacheManager = this.config.storageInterface;
+    this.networkClient = this.config.networkInterface;
+    this.serverTelemetryManager = this.config.serverTelemetryManager;
+    this.authority = this.config.authOptions.authority;
+    this.performanceClient = performanceClient;
   }
-  async acquireToken(request5) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.RefreshTokenClientAcquireToken, request5.correlationId);
+  async acquireToken(request5, apiId) {
     const reqTimestamp = nowSeconds();
-    const response = await invokeAsync(this.executeTokenRequest.bind(this), PerformanceEvents.RefreshTokenClientExecuteTokenRequest, this.logger, this.performanceClient, request5.correlationId)(request5, this.authority);
+    const response = await invokeAsync(this.executeTokenRequest.bind(this), RefreshTokenClientExecuteTokenRequest, this.logger, this.performanceClient, request5.correlationId)(request5, this.authority);
     const requestId = response.headers?.[HeaderNames.X_MS_REQUEST_ID];
-    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.config.serializableCache, this.config.persistencePlugin);
-    responseHandler.validateTokenResponse(response.body);
-    return invokeAsync(responseHandler.handleServerTokenResponse.bind(responseHandler), PerformanceEvents.HandleServerTokenResponse, this.logger, this.performanceClient, request5.correlationId)(response.body, this.authority, reqTimestamp, request5, void 0, void 0, true, request5.forceCache, requestId);
+    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.performanceClient, this.config.serializableCache, this.config.persistencePlugin);
+    responseHandler.validateTokenResponse(response.body, request5.correlationId);
+    return invokeAsync(responseHandler.handleServerTokenResponse.bind(responseHandler), HandleServerTokenResponse, this.logger, this.performanceClient, request5.correlationId)(response.body, this.authority, reqTimestamp, request5, apiId, void 0, void 0, true, request5.forceCache, requestId);
   }
   /**
    * Gets cached refresh token and attaches to request, then calls acquireToken API
    * @param request
    */
-  async acquireTokenByRefreshToken(request5) {
+  async acquireTokenByRefreshToken(request5, apiId) {
     if (!request5) {
       throw createClientConfigurationError(tokenRequestEmpty);
     }
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.RefreshTokenClientAcquireTokenByRefreshToken, request5.correlationId);
     if (!request5.account) {
       throw createClientAuthError(noAccountInSilentRequest);
     }
-    const isFOCI = this.cacheManager.isAppMetadataFOCI(request5.account.environment);
+    const isFOCI = this.cacheManager.isAppMetadataFOCI(request5.account.environment, request5.correlationId);
     if (isFOCI) {
       try {
-        return await invokeAsync(this.acquireTokenWithCachedRefreshToken.bind(this), PerformanceEvents.RefreshTokenClientAcquireTokenWithCachedRefreshToken, this.logger, this.performanceClient, request5.correlationId)(request5, true);
+        return await invokeAsync(this.acquireTokenWithCachedRefreshToken.bind(this), RefreshTokenClientAcquireTokenWithCachedRefreshToken, this.logger, this.performanceClient, request5.correlationId)(request5, true, apiId);
       } catch (e) {
         const noFamilyRTInCache = e instanceof InteractionRequiredAuthError && e.errorCode === noTokensFound;
-        const clientMismatchErrorWithFamilyRT = e instanceof ServerError && e.errorCode === Errors.INVALID_GRANT_ERROR && e.subError === Errors.CLIENT_MISMATCH_ERROR;
+        const clientMismatchErrorWithFamilyRT = e instanceof ServerError && e.errorCode === INVALID_GRANT_ERROR && e.subError === CLIENT_MISMATCH_ERROR;
         if (noFamilyRTInCache || clientMismatchErrorWithFamilyRT) {
-          return invokeAsync(this.acquireTokenWithCachedRefreshToken.bind(this), PerformanceEvents.RefreshTokenClientAcquireTokenWithCachedRefreshToken, this.logger, this.performanceClient, request5.correlationId)(request5, false);
+          return invokeAsync(this.acquireTokenWithCachedRefreshToken.bind(this), RefreshTokenClientAcquireTokenWithCachedRefreshToken, this.logger, this.performanceClient, request5.correlationId)(request5, false, apiId);
         } else {
           throw e;
         }
       }
     }
-    return invokeAsync(this.acquireTokenWithCachedRefreshToken.bind(this), PerformanceEvents.RefreshTokenClientAcquireTokenWithCachedRefreshToken, this.logger, this.performanceClient, request5.correlationId)(request5, false);
+    return invokeAsync(this.acquireTokenWithCachedRefreshToken.bind(this), RefreshTokenClientAcquireTokenWithCachedRefreshToken, this.logger, this.performanceClient, request5.correlationId)(request5, false, apiId);
   }
   /**
    * makes a network call to acquire tokens by exchanging RefreshToken available in userCache; throws if refresh token is not cached
    * @param request
    */
-  async acquireTokenWithCachedRefreshToken(request5, foci) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.RefreshTokenClientAcquireTokenWithCachedRefreshToken, request5.correlationId);
-    const refreshToken = invoke(this.cacheManager.getRefreshToken.bind(this.cacheManager), PerformanceEvents.CacheManagerGetRefreshToken, this.logger, this.performanceClient, request5.correlationId)(request5.account, foci, void 0, this.performanceClient, request5.correlationId);
+  async acquireTokenWithCachedRefreshToken(request5, foci, apiId) {
+    const refreshToken = invoke(this.cacheManager.getRefreshToken.bind(this.cacheManager), CacheManagerGetRefreshToken, this.logger, this.performanceClient, request5.correlationId)(request5.account, foci, request5.correlationId, void 0);
     if (!refreshToken) {
       throw createInteractionRequiredAuthError(noTokensFound);
     }
-    if (refreshToken.expiresOn && isTokenExpired(refreshToken.expiresOn, request5.refreshTokenExpirationOffsetSeconds || DEFAULT_REFRESH_TOKEN_EXPIRATION_OFFSET_SECONDS)) {
-      this.performanceClient?.addFields({ rtExpiresOnMs: Number(refreshToken.expiresOn) }, request5.correlationId);
-      throw createInteractionRequiredAuthError(refreshTokenExpired);
+    if (refreshToken.expiresOn) {
+      const offset = request5.refreshTokenExpirationOffsetSeconds || DEFAULT_REFRESH_TOKEN_EXPIRATION_OFFSET_SECONDS;
+      this.performanceClient?.addFields({
+        cacheRtExpiresOnSeconds: Number(refreshToken.expiresOn),
+        rtOffsetSeconds: offset
+      }, request5.correlationId);
+      if (isTokenExpired(refreshToken.expiresOn, offset)) {
+        throw createInteractionRequiredAuthError(refreshTokenExpired);
+      }
     }
     const refreshTokenRequest = {
       ...request5,
@@ -36997,14 +37287,13 @@ var RefreshTokenClient = class extends BaseClient {
       }
     };
     try {
-      return await invokeAsync(this.acquireToken.bind(this), PerformanceEvents.RefreshTokenClientAcquireToken, this.logger, this.performanceClient, request5.correlationId)(refreshTokenRequest);
+      return await invokeAsync(this.acquireToken.bind(this), RefreshTokenClientAcquireToken, this.logger, this.performanceClient, request5.correlationId)(refreshTokenRequest, apiId);
     } catch (e) {
       if (e instanceof InteractionRequiredAuthError) {
-        this.performanceClient?.addFields({ rtExpiresOnMs: Number(refreshToken.expiresOn) }, request5.correlationId);
         if (e.subError === badToken) {
-          this.logger.verbose("acquireTokenWithRefreshToken: bad refresh token, removing from cache");
-          const badRefreshTokenKey = generateCredentialKey(refreshToken);
-          this.cacheManager.removeRefreshToken(badRefreshTokenKey);
+          this.logger.verbose("acquireTokenWithRefreshToken: bad refresh token, removing from cache", request5.correlationId);
+          const badRefreshTokenKey = this.cacheManager.generateCredentialKey(refreshToken);
+          this.cacheManager.removeRefreshToken(badRefreshTokenKey, request5.correlationId);
         }
       }
       throw e;
@@ -37016,22 +37305,20 @@ var RefreshTokenClient = class extends BaseClient {
    * @param authority
    */
   async executeTokenRequest(request5, authority) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.RefreshTokenClientExecuteTokenRequest, request5.correlationId);
-    const queryParametersString = this.createTokenQueryParameters(request5);
+    const queryParametersString = createTokenQueryParameters(request5, this.config.authOptions.clientId, this.config.authOptions.redirectUri, this.performanceClient);
     const endpoint = UrlString.appendQueryString(authority.tokenEndpoint, queryParametersString);
-    const requestBody = await invokeAsync(this.createTokenRequestBody.bind(this), PerformanceEvents.RefreshTokenClientCreateTokenRequestBody, this.logger, this.performanceClient, request5.correlationId)(request5);
-    const headers = this.createTokenRequestHeaders(request5.ccsCredential);
+    const requestBody = await invokeAsync(this.createTokenRequestBody.bind(this), RefreshTokenClientCreateTokenRequestBody, this.logger, this.performanceClient, request5.correlationId)(request5);
+    const headers = createTokenRequestHeaders(this.logger, this.config.systemOptions.preventCorsPreflight, request5.ccsCredential);
     const thumbprint = getRequestThumbprint(this.config.authOptions.clientId, request5);
-    return invokeAsync(this.executePostToTokenEndpoint.bind(this), PerformanceEvents.RefreshTokenClientExecutePostToTokenEndpoint, this.logger, this.performanceClient, request5.correlationId)(endpoint, requestBody, headers, thumbprint, request5.correlationId, PerformanceEvents.RefreshTokenClientExecutePostToTokenEndpoint);
+    return invokeAsync(executePostToTokenEndpoint, RefreshTokenClientExecutePostToTokenEndpoint, this.logger, this.performanceClient, request5.correlationId)(endpoint, requestBody, headers, thumbprint, request5.correlationId, this.cacheManager, this.networkClient, this.logger, this.performanceClient, this.serverTelemetryManager);
   }
   /**
    * Helper function to create the token request body
    * @param request
    */
   async createTokenRequestBody(request5) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.RefreshTokenClientCreateTokenRequestBody, request5.correlationId);
     const parameters = /* @__PURE__ */ new Map();
-    addClientId(parameters, request5.embeddedClientId || request5.tokenBodyParameters?.[CLIENT_ID] || this.config.authOptions.clientId);
+    addClientId(parameters, request5.embeddedClientId || request5.extraParameters?.[CLIENT_ID] || this.config.authOptions.clientId);
     if (request5.redirectUri) {
       addRedirectUri(parameters, request5.redirectUri);
     }
@@ -37057,7 +37344,7 @@ var RefreshTokenClient = class extends BaseClient {
       const popTokenGenerator = new PopTokenGenerator(this.cryptoUtils, this.performanceClient);
       let reqCnfData;
       if (!request5.popKid) {
-        const generatedReqCnfData = await invokeAsync(popTokenGenerator.generateCnf.bind(popTokenGenerator), PerformanceEvents.PopTokenGenerateCnf, this.logger, this.performanceClient, request5.correlationId)(request5, this.logger);
+        const generatedReqCnfData = await invokeAsync(popTokenGenerator.generateCnf.bind(popTokenGenerator), PopTokenGenerateCnf, this.logger, this.performanceClient, request5.correlationId)(request5, this.logger);
         reqCnfData = generatedReqCnfData.reqCnfString;
       } else {
         reqCnfData = this.cryptoUtils.encodeKid(request5.popKid);
@@ -37080,7 +37367,7 @@ var RefreshTokenClient = class extends BaseClient {
             const clientInfo = buildClientInfoFromHomeAccountId(request5.ccsCredential.credential);
             addCcsOid(parameters, clientInfo);
           } catch (e) {
-            this.logger.verbose("Could not parse home account ID for CCS Header: " + e);
+            this.logger.verbose(`Could not parse home account ID for CCS Header: '${e}'`, request5.correlationId);
           }
           break;
         case CcsCredentialType.UPN:
@@ -37091,27 +37378,35 @@ var RefreshTokenClient = class extends BaseClient {
     if (request5.embeddedClientId) {
       addBrokerParameters(parameters, this.config.authOptions.clientId, this.config.authOptions.redirectUri);
     }
-    if (request5.tokenBodyParameters) {
-      addExtraQueryParameters(parameters, request5.tokenBodyParameters);
+    if (request5.extraParameters) {
+      addExtraParameters(parameters, {
+        ...request5.extraParameters
+      });
     }
     instrumentBrokerParams(parameters, request5.correlationId, this.performanceClient);
     return mapToQueryString(parameters);
   }
 };
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/client/SilentFlowClient.mjs
-var SilentFlowClient = class extends BaseClient {
+// node_modules/@azure/msal-common/dist/client/SilentFlowClient.mjs
+var SilentFlowClient = class {
   constructor(configuration, performanceClient) {
-    super(configuration, performanceClient);
+    this.config = buildClientConfiguration(configuration);
+    this.logger = new Logger(this.config.loggerOptions, name, version);
+    this.cryptoUtils = this.config.cryptoInterface;
+    this.cacheManager = this.config.storageInterface;
+    this.networkClient = this.config.networkInterface;
+    this.serverTelemetryManager = this.config.serverTelemetryManager;
+    this.authority = this.config.authOptions.authority;
+    this.performanceClient = performanceClient;
   }
   /**
    * Retrieves token from cache or throws an error if it must be refreshed.
    * @param request
    */
   async acquireCachedToken(request5) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.SilentFlowClientAcquireCachedToken, request5.correlationId);
     let lastCacheOutcome = CacheOutcome.NOT_APPLICABLE;
-    if (request5.forceRefresh || !this.config.cacheOptions.claimsBasedCachingEnabled && !StringUtils.isEmptyObj(request5.claims)) {
+    if (request5.forceRefresh || !StringUtils.isEmptyObj(request5.claims)) {
       this.setCacheOutcome(CacheOutcome.FORCE_REFRESH_OR_CLAIMS, request5.correlationId);
       throw createClientAuthError(tokenRefreshRequired);
     }
@@ -37120,30 +37415,35 @@ var SilentFlowClient = class extends BaseClient {
     }
     const requestTenantId = request5.account.tenantId || getTenantFromAuthorityString(request5.authority);
     const tokenKeys = this.cacheManager.getTokenKeys();
-    const cachedAccessToken = this.cacheManager.getAccessToken(request5.account, request5, tokenKeys, requestTenantId, this.performanceClient, request5.correlationId);
+    const cachedAccessToken = this.cacheManager.getAccessToken(request5.account, request5, tokenKeys, requestTenantId);
     if (!cachedAccessToken) {
       this.setCacheOutcome(CacheOutcome.NO_CACHED_ACCESS_TOKEN, request5.correlationId);
       throw createClientAuthError(tokenRefreshRequired);
     } else if (wasClockTurnedBack(cachedAccessToken.cachedAt) || isTokenExpired(cachedAccessToken.expiresOn, this.config.systemOptions.tokenRenewalOffsetSeconds)) {
       this.setCacheOutcome(CacheOutcome.CACHED_ACCESS_TOKEN_EXPIRED, request5.correlationId);
       throw createClientAuthError(tokenRefreshRequired);
+    } else if (request5.resource) {
+      if (cachedAccessToken.resource !== request5.resource) {
+        this.setCacheOutcome(CacheOutcome.NO_CACHED_ACCESS_TOKEN, request5.correlationId);
+        throw createClientAuthError(tokenRefreshRequired);
+      }
     } else if (cachedAccessToken.refreshOn && isTokenExpired(cachedAccessToken.refreshOn, 0)) {
       lastCacheOutcome = CacheOutcome.PROACTIVELY_REFRESHED;
     }
     const environment = request5.authority || this.authority.getPreferredCache();
     const cacheRecord = {
-      account: this.cacheManager.readAccountFromCache(request5.account),
+      account: this.cacheManager.getAccount(this.cacheManager.generateAccountKey(request5.account), request5.correlationId),
       accessToken: cachedAccessToken,
-      idToken: this.cacheManager.getIdToken(request5.account, tokenKeys, requestTenantId, this.performanceClient, request5.correlationId),
+      idToken: this.cacheManager.getIdToken(request5.account, request5.correlationId, tokenKeys, requestTenantId),
       refreshToken: null,
-      appMetadata: this.cacheManager.readAppMetadataFromCache(environment)
+      appMetadata: this.cacheManager.readAppMetadataFromCache(environment, request5.correlationId)
     };
     this.setCacheOutcome(lastCacheOutcome, request5.correlationId);
     if (this.config.serverTelemetryManager) {
       this.config.serverTelemetryManager.incrementCacheHits();
     }
     return [
-      await invokeAsync(this.generateResultFromCacheRecord.bind(this), PerformanceEvents.SilentFlowClientGenerateResultFromCacheRecord, this.logger, this.performanceClient, request5.correlationId)(cacheRecord, request5),
+      await invokeAsync(this.generateResultFromCacheRecord.bind(this), SilentFlowClientGenerateResultFromCacheRecord, this.logger, this.performanceClient, request5.correlationId)(cacheRecord, request5),
       lastCacheOutcome
     ];
   }
@@ -37153,7 +37453,7 @@ var SilentFlowClient = class extends BaseClient {
       cacheOutcome
     }, correlationId);
     if (cacheOutcome !== CacheOutcome.NOT_APPLICABLE) {
-      this.logger.info(`Token refresh is required due to cache outcome: ${cacheOutcome}`);
+      this.logger.info(`Token refresh is required due to cache outcome: '${cacheOutcome}'`, correlationId);
     }
   }
   /**
@@ -37161,7 +37461,6 @@ var SilentFlowClient = class extends BaseClient {
    * @param cacheRecord
    */
   async generateResultFromCacheRecord(cacheRecord, request5) {
-    this.performanceClient?.addQueueMeasurement(PerformanceEvents.SilentFlowClientGenerateResultFromCacheRecord, request5.correlationId);
     let idTokenClaims;
     if (cacheRecord.idToken) {
       idTokenClaims = extractTokenClaims(cacheRecord.idToken.secret, this.config.cryptoInterface.base64Decode);
@@ -37173,11 +37472,11 @@ var SilentFlowClient = class extends BaseClient {
       }
       checkMaxAge(authTime, request5.maxAge);
     }
-    return ResponseHandler.generateAuthenticationResult(this.cryptoUtils, this.authority, cacheRecord, true, request5, idTokenClaims);
+    return ResponseHandler.generateAuthenticationResult(this.cryptoUtils, this.authority, cacheRecord, true, request5, this.performanceClient, idTokenClaims);
   }
 };
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/protocol/Authorize.mjs
+// node_modules/@azure/msal-common/dist/protocol/Authorize.mjs
 var Authorize_exports = {};
 __export(Authorize_exports, {
   getAuthorizationCodePayload: () => getAuthorizationCodePayload,
@@ -37194,10 +37493,12 @@ function getStandardAuthorizeRequestParameters(authOptions, request5, logger31, 
     ...request5.extraScopesToConsent || []
   ];
   addScopes(parameters, requestScopes, true, authOptions.authority.options.OIDCOptions?.defaultScopes);
+  addResource(parameters, request5.resource);
   addRedirectUri(parameters, request5.redirectUri);
   addCorrelationId(parameters, correlationId);
   addResponseMode(parameters, request5.responseMode);
   addClientInfo(parameters);
+  addCliData(parameters);
   if (request5.prompt) {
     addPrompt(parameters, request5.prompt);
     performanceClient?.addFields({ prompt: request5.prompt }, correlationId);
@@ -37208,60 +37509,60 @@ function getStandardAuthorizeRequestParameters(authOptions, request5, logger31, 
   }
   if (request5.prompt !== PromptValue.SELECT_ACCOUNT) {
     if (request5.sid && request5.prompt === PromptValue.NONE) {
-      logger31.verbose("createAuthCodeUrlQueryString: Prompt is none, adding sid from request");
+      logger31.verbose("createAuthCodeUrlQueryString: Prompt is none, adding sid from request", request5.correlationId);
       addSid(parameters, request5.sid);
       performanceClient?.addFields({ sidFromRequest: true }, correlationId);
     } else if (request5.account) {
       const accountSid = extractAccountSid(request5.account);
       let accountLoginHintClaim = extractLoginHint(request5.account);
       if (accountLoginHintClaim && request5.domainHint) {
-        logger31.warning(`AuthorizationCodeClient.createAuthCodeUrlQueryString: "domainHint" param is set, skipping opaque "login_hint" claim. Please consider not passing domainHint`);
+        logger31.warning(`AuthorizationCodeClient.createAuthCodeUrlQueryString: "domainHint" param is set, skipping opaque "login_hint" claim. Please consider not passing domainHint`, request5.correlationId);
         accountLoginHintClaim = null;
       }
       if (accountLoginHintClaim) {
-        logger31.verbose("createAuthCodeUrlQueryString: login_hint claim present on account");
+        logger31.verbose("createAuthCodeUrlQueryString: login_hint claim present on account", request5.correlationId);
         addLoginHint(parameters, accountLoginHintClaim);
         performanceClient?.addFields({ loginHintFromClaim: true }, correlationId);
         try {
           const clientInfo = buildClientInfoFromHomeAccountId(request5.account.homeAccountId);
           addCcsOid(parameters, clientInfo);
         } catch (e) {
-          logger31.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header");
+          logger31.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header", request5.correlationId);
         }
       } else if (accountSid && request5.prompt === PromptValue.NONE) {
-        logger31.verbose("createAuthCodeUrlQueryString: Prompt is none, adding sid from account");
+        logger31.verbose("createAuthCodeUrlQueryString: Prompt is none, adding sid from account", request5.correlationId);
         addSid(parameters, accountSid);
         performanceClient?.addFields({ sidFromClaim: true }, correlationId);
         try {
           const clientInfo = buildClientInfoFromHomeAccountId(request5.account.homeAccountId);
           addCcsOid(parameters, clientInfo);
         } catch (e) {
-          logger31.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header");
+          logger31.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header", request5.correlationId);
         }
       } else if (request5.loginHint) {
-        logger31.verbose("createAuthCodeUrlQueryString: Adding login_hint from request");
+        logger31.verbose("createAuthCodeUrlQueryString: Adding login_hint from request", request5.correlationId);
         addLoginHint(parameters, request5.loginHint);
         addCcsUpn(parameters, request5.loginHint);
         performanceClient?.addFields({ loginHintFromRequest: true }, correlationId);
       } else if (request5.account.username) {
-        logger31.verbose("createAuthCodeUrlQueryString: Adding login_hint from account");
+        logger31.verbose("createAuthCodeUrlQueryString: Adding login_hint from account", request5.correlationId);
         addLoginHint(parameters, request5.account.username);
         performanceClient?.addFields({ loginHintFromUpn: true }, correlationId);
         try {
           const clientInfo = buildClientInfoFromHomeAccountId(request5.account.homeAccountId);
           addCcsOid(parameters, clientInfo);
         } catch (e) {
-          logger31.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header");
+          logger31.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header", request5.correlationId);
         }
       }
     } else if (request5.loginHint) {
-      logger31.verbose("createAuthCodeUrlQueryString: No account, adding login_hint from request");
+      logger31.verbose("createAuthCodeUrlQueryString: No account, adding login_hint from request", request5.correlationId);
       addLoginHint(parameters, request5.loginHint);
       addCcsUpn(parameters, request5.loginHint);
       performanceClient?.addFields({ loginHintFromRequest: true }, correlationId);
     }
   } else {
-    logger31.verbose("createAuthCodeUrlQueryString: Prompt is select_account, ignoring account hints");
+    logger31.verbose("createAuthCodeUrlQueryString: Prompt is select_account, ignoring account hints", request5.correlationId);
   }
   if (request5.nonce) {
     addNonce(parameters, request5.nonce);
@@ -37280,8 +37581,8 @@ function getStandardAuthorizeRequestParameters(authOptions, request5, logger31, 
   }
   return parameters;
 }
-function getAuthorizeUrl(authority, requestParameters, encodeParams, extraQueryParameters) {
-  const queryString = mapToQueryString(requestParameters, encodeParams, extraQueryParameters);
+function getAuthorizeUrl(authority, requestParameters) {
+  const queryString = mapToQueryString(requestParameters);
   return UrlString.appendQueryString(authority.authorizationEndpoint, queryString);
 }
 function getAuthorizationCodePayload(serverParams, cachedState) {
@@ -37327,10 +37628,38 @@ function extractAccountSid(account) {
   return account.idTokenClaims?.sid || null;
 }
 function extractLoginHint(account) {
-  return account.idTokenClaims?.login_hint || null;
+  return account.loginHint || account.idTokenClaims?.login_hint || null;
 }
 
-// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/telemetry/server/ServerTelemetryManager.mjs
+// node_modules/@azure/msal-common/dist/request/BaseAuthRequest.mjs
+function enforceResourceParameter(isMcp, request5) {
+  if (!isMcp) {
+    return;
+  }
+  if (request5.resource && (containsResourceParam(request5.extraParameters) || containsResourceParam(request5.extraQueryParameters))) {
+    throw createClientAuthError(misplacedResourceParam);
+  }
+  if (!request5.resource) {
+    throw createClientAuthError(resourceParameterRequired);
+  }
+}
+function containsResourceParam(params) {
+  if (!params) {
+    return false;
+  }
+  return Object.prototype.hasOwnProperty.call(params, "resource");
+}
+
+// node_modules/@azure/msal-common/dist/error/AuthErrorCodes.mjs
+var AuthErrorCodes_exports = {};
+__export(AuthErrorCodes_exports, {
+  postRequestFailed: () => postRequestFailed,
+  unexpectedError: () => unexpectedError
+});
+var unexpectedError = "unexpected_error";
+var postRequestFailed = "post_request_failed";
+
+// node_modules/@azure/msal-common/dist/telemetry/server/ServerTelemetryManager.mjs
 var skuGroupSeparator = ",";
 var skuValueSeparator = "|";
 function makeExtraSkuString(params) {
@@ -37373,31 +37702,31 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
     this.cacheManager = cacheManager;
     this.apiId = telemetryRequest.apiId;
     this.correlationId = telemetryRequest.correlationId;
-    this.wrapperSKU = telemetryRequest.wrapperSKU || Constants.EMPTY_STRING;
-    this.wrapperVer = telemetryRequest.wrapperVer || Constants.EMPTY_STRING;
-    this.telemetryCacheKey = SERVER_TELEM_CONSTANTS.CACHE_KEY + Separators.CACHE_KEY_SEPARATOR + telemetryRequest.clientId;
+    this.wrapperSKU = telemetryRequest.wrapperSKU || "";
+    this.wrapperVer = telemetryRequest.wrapperVer || "";
+    this.telemetryCacheKey = SERVER_TELEM_CACHE_KEY + CACHE_KEY_SEPARATOR + telemetryRequest.clientId;
   }
   /**
    * API to add MSER Telemetry to request
    */
   generateCurrentRequestHeaderValue() {
-    const request5 = `${this.apiId}${SERVER_TELEM_CONSTANTS.VALUE_SEPARATOR}${this.cacheOutcome}`;
+    const request5 = `${this.apiId}${SERVER_TELEM_VALUE_SEPARATOR}${this.cacheOutcome}`;
     const platformFieldsArr = [this.wrapperSKU, this.wrapperVer];
     const nativeBrokerErrorCode = this.getNativeBrokerErrorCode();
     if (nativeBrokerErrorCode?.length) {
       platformFieldsArr.push(`broker_error=${nativeBrokerErrorCode}`);
     }
-    const platformFields = platformFieldsArr.join(SERVER_TELEM_CONSTANTS.VALUE_SEPARATOR);
+    const platformFields = platformFieldsArr.join(SERVER_TELEM_VALUE_SEPARATOR);
     const regionDiscoveryFields = this.getRegionDiscoveryFields();
     const requestWithRegionDiscoveryFields = [
       request5,
       regionDiscoveryFields
-    ].join(SERVER_TELEM_CONSTANTS.VALUE_SEPARATOR);
+    ].join(SERVER_TELEM_VALUE_SEPARATOR);
     return [
-      SERVER_TELEM_CONSTANTS.SCHEMA_VERSION,
+      SERVER_TELEM_SCHEMA_VERSION,
       requestWithRegionDiscoveryFields,
       platformFields
-    ].join(SERVER_TELEM_CONSTANTS.CATEGORY_SEPARATOR);
+    ].join(SERVER_TELEM_CATEGORY_SEPARATOR);
   }
   /**
    * API to add MSER Telemetry for the last failed request
@@ -37405,18 +37734,18 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
   generateLastRequestHeaderValue() {
     const lastRequests = this.getLastRequests();
     const maxErrors = _ServerTelemetryManager.maxErrorsToSend(lastRequests);
-    const failedRequests = lastRequests.failedRequests.slice(0, 2 * maxErrors).join(SERVER_TELEM_CONSTANTS.VALUE_SEPARATOR);
-    const errors = lastRequests.errors.slice(0, maxErrors).join(SERVER_TELEM_CONSTANTS.VALUE_SEPARATOR);
+    const failedRequests = lastRequests.failedRequests.slice(0, 2 * maxErrors).join(SERVER_TELEM_VALUE_SEPARATOR);
+    const errors = lastRequests.errors.slice(0, maxErrors).join(SERVER_TELEM_VALUE_SEPARATOR);
     const errorCount = lastRequests.errors.length;
-    const overflow = maxErrors < errorCount ? SERVER_TELEM_CONSTANTS.OVERFLOW_TRUE : SERVER_TELEM_CONSTANTS.OVERFLOW_FALSE;
-    const platformFields = [errorCount, overflow].join(SERVER_TELEM_CONSTANTS.VALUE_SEPARATOR);
+    const overflow = maxErrors < errorCount ? SERVER_TELEM_OVERFLOW_TRUE : SERVER_TELEM_OVERFLOW_FALSE;
+    const platformFields = [errorCount, overflow].join(SERVER_TELEM_VALUE_SEPARATOR);
     return [
-      SERVER_TELEM_CONSTANTS.SCHEMA_VERSION,
+      SERVER_TELEM_SCHEMA_VERSION,
       lastRequests.cacheHits,
       failedRequests,
       errors,
       platformFields
-    ].join(SERVER_TELEM_CONSTANTS.CATEGORY_SEPARATOR);
+    ].join(SERVER_TELEM_CATEGORY_SEPARATOR);
   }
   /**
    * API to cache token failures for MSER data capture
@@ -37424,7 +37753,7 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
    */
   cacheFailedRequest(error2) {
     const lastRequests = this.getLastRequests();
-    if (lastRequests.errors.length >= SERVER_TELEM_CONSTANTS.MAX_CACHED_ERRORS) {
+    if (lastRequests.errors.length >= SERVER_TELEM_MAX_CACHED_ERRORS) {
       lastRequests.failedRequests.shift();
       lastRequests.failedRequests.shift();
       lastRequests.errors.shift();
@@ -37443,9 +37772,9 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
         lastRequests.errors.push(error2.toString());
       }
     } else {
-      lastRequests.errors.push(SERVER_TELEM_CONSTANTS.UNKNOWN_ERROR);
+      lastRequests.errors.push(SERVER_TELEM_UNKNOWN_ERROR);
     }
-    this.cacheManager.setServerTelemetry(this.telemetryCacheKey, lastRequests);
+    this.cacheManager.setServerTelemetry(this.telemetryCacheKey, lastRequests, this.correlationId);
     return;
   }
   /**
@@ -37454,7 +37783,7 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
   incrementCacheHits() {
     const lastRequests = this.getLastRequests();
     lastRequests.cacheHits += 1;
-    this.cacheManager.setServerTelemetry(this.telemetryCacheKey, lastRequests);
+    this.cacheManager.setServerTelemetry(this.telemetryCacheKey, lastRequests, this.correlationId);
     return lastRequests.cacheHits;
   }
   /**
@@ -37466,7 +37795,7 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
       errors: [],
       cacheHits: 0
     };
-    const lastRequests = this.cacheManager.getServerTelemetry(this.telemetryCacheKey);
+    const lastRequests = this.cacheManager.getServerTelemetry(this.telemetryCacheKey, this.correlationId);
     return lastRequests || initialValue;
   }
   /**
@@ -37477,14 +37806,14 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
     const numErrorsFlushed = _ServerTelemetryManager.maxErrorsToSend(lastRequests);
     const errorCount = lastRequests.errors.length;
     if (numErrorsFlushed === errorCount) {
-      this.cacheManager.removeItem(this.telemetryCacheKey);
+      this.cacheManager.removeItem(this.telemetryCacheKey, this.correlationId);
     } else {
       const serverTelemEntity = {
         failedRequests: lastRequests.failedRequests.slice(numErrorsFlushed * 2),
         errors: lastRequests.errors.slice(numErrorsFlushed),
         cacheHits: 0
       };
-      this.cacheManager.setServerTelemetry(this.telemetryCacheKey, serverTelemEntity);
+      this.cacheManager.setServerTelemetry(this.telemetryCacheKey, serverTelemEntity, this.correlationId);
     }
   }
   /**
@@ -37497,11 +37826,11 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
     let dataSize = 0;
     const errorCount = serverTelemetryEntity.errors.length;
     for (i = 0; i < errorCount; i++) {
-      const apiId = serverTelemetryEntity.failedRequests[2 * i] || Constants.EMPTY_STRING;
-      const correlationId = serverTelemetryEntity.failedRequests[2 * i + 1] || Constants.EMPTY_STRING;
-      const errorCode = serverTelemetryEntity.errors[i] || Constants.EMPTY_STRING;
+      const apiId = serverTelemetryEntity.failedRequests[2 * i] || "";
+      const correlationId = serverTelemetryEntity.failedRequests[2 * i + 1] || "";
+      const errorCode = serverTelemetryEntity.errors[i] || "";
       dataSize += apiId.toString().length + correlationId.toString().length + errorCode.length + 3;
-      if (dataSize < SERVER_TELEM_CONSTANTS.MAX_LAST_HEADER_BYTES) {
+      if (dataSize < SERVER_TELEM_MAX_LAST_HEADER_BYTES) {
         maxErrors += 1;
       } else {
         break;
@@ -37516,9 +37845,9 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
    */
   getRegionDiscoveryFields() {
     const regionDiscoveryFields = [];
-    regionDiscoveryFields.push(this.regionUsed || Constants.EMPTY_STRING);
-    regionDiscoveryFields.push(this.regionSource || Constants.EMPTY_STRING);
-    regionDiscoveryFields.push(this.regionOutcome || Constants.EMPTY_STRING);
+    regionDiscoveryFields.push(this.regionUsed || "");
+    regionDiscoveryFields.push(this.regionSource || "");
+    regionDiscoveryFields.push(this.regionOutcome || "");
     return regionDiscoveryFields.join(",");
   }
   /**
@@ -37541,7 +37870,7 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
   setNativeBrokerErrorCode(errorCode) {
     const lastRequests = this.getLastRequests();
     lastRequests.nativeBrokerErrorCode = errorCode;
-    this.cacheManager.setServerTelemetry(this.telemetryCacheKey, lastRequests);
+    this.cacheManager.setServerTelemetry(this.telemetryCacheKey, lastRequests, this.correlationId);
   }
   getNativeBrokerErrorCode() {
     return this.getLastRequests().nativeBrokerErrorCode;
@@ -37549,7 +37878,7 @@ var ServerTelemetryManager = class _ServerTelemetryManager {
   clearNativeBrokerErrorCode() {
     const lastRequests = this.getLastRequests();
     delete lastRequests.nativeBrokerErrorCode;
-    this.cacheManager.setServerTelemetry(this.telemetryCacheKey, lastRequests);
+    this.cacheManager.setServerTelemetry(this.telemetryCacheKey, lastRequests, this.correlationId);
   }
   static makeExtraSkuString(params) {
     return makeExtraSkuString(params);
@@ -37588,9 +37917,10 @@ var Deserializer = class {
           lastModificationApp: serializedAcc.last_modification_app,
           tenantProfiles: serializedAcc.tenantProfiles?.map((serializedTenantProfile) => {
             return JSON.parse(serializedTenantProfile);
-          })
+          }),
+          lastUpdatedAt: Date.now().toString()
         };
-        const account = new AccountEntity();
+        const account = {};
         CacheManager.toObject(account, mappedAcc);
         accountObjects[key] = account;
       });
@@ -37612,7 +37942,8 @@ var Deserializer = class {
           credentialType: serializedIdT.credential_type,
           clientId: serializedIdT.client_id,
           secret: serializedIdT.secret,
-          realm: serializedIdT.realm
+          realm: serializedIdT.realm,
+          lastUpdatedAt: Date.now().toString()
         };
         idObjects[key] = idToken;
       });
@@ -37642,9 +37973,9 @@ var Deserializer = class {
           refreshOn: serializedAT.refresh_on,
           keyId: serializedAT.key_id,
           tokenType: serializedAT.token_type,
-          requestedClaims: serializedAT.requestedClaims,
-          requestedClaimsHash: serializedAT.requestedClaimsHash,
-          userAssertionHash: serializedAT.userAssertionHash
+          userAssertionHash: serializedAT.userAssertionHash,
+          resource: serializedAT.resource,
+          lastUpdatedAt: Date.now().toString()
         };
         atObjects[key] = accessToken;
       });
@@ -37668,7 +37999,8 @@ var Deserializer = class {
           secret: serializedRT.secret,
           familyId: serializedRT.family_id,
           target: serializedRT.target,
-          realm: serializedRT.realm
+          realm: serializedRT.realm,
+          lastUpdatedAt: Date.now().toString()
         };
         rtObjects[key] = refreshToken;
       });
@@ -37709,17 +38041,24 @@ var Deserializer = class {
 };
 
 // node_modules/@azure/msal-node/dist/utils/Constants.mjs
-var AUTHORIZATION_HEADER_NAME = "Authorization";
-var METADATA_HEADER_NAME = "Metadata";
-var APP_SERVICE_SECRET_HEADER_NAME = "X-IDENTITY-HEADER";
-var ML_AND_SF_SECRET_HEADER_NAME = "secret";
-var API_VERSION_QUERY_PARAMETER_NAME = "api-version";
-var RESOURCE_BODY_OR_QUERY_PARAMETER_NAME = "resource";
 var DEFAULT_MANAGED_IDENTITY_ID = "system_assigned_managed_identity";
 var MANAGED_IDENTITY_DEFAULT_TENANT = "managed_identity";
 var DEFAULT_AUTHORITY_FOR_MANAGED_IDENTITY = `https://login.microsoftonline.com/${MANAGED_IDENTITY_DEFAULT_TENANT}/`;
+var ManagedIdentityHeaders = {
+  AUTHORIZATION_HEADER_NAME: "Authorization",
+  METADATA_HEADER_NAME: "Metadata",
+  APP_SERVICE_SECRET_HEADER_NAME: "X-IDENTITY-HEADER",
+  ML_AND_SF_SECRET_HEADER_NAME: "secret"
+};
+var ManagedIdentityQueryParameters = {
+  API_VERSION: "api-version",
+  RESOURCE: "resource",
+  SHA256_TOKEN_TO_REFRESH: "token_sha256_to_refresh",
+  XMS_CC: "xms_cc"
+};
 var ManagedIdentityEnvironmentVariableNames = {
   AZURE_POD_IDENTITY_AUTHORITY_HOST: "AZURE_POD_IDENTITY_AUTHORITY_HOST",
+  DEFAULT_IDENTITY_CLIENT_ID: "DEFAULT_IDENTITY_CLIENT_ID",
   IDENTITY_ENDPOINT: "IDENTITY_ENDPOINT",
   IDENTITY_HEADER: "IDENTITY_HEADER",
   IDENTITY_SERVER_THUMBPRINT: "IDENTITY_SERVER_THUMBPRINT",
@@ -37742,15 +38081,9 @@ var ManagedIdentityIdType = {
   USER_ASSIGNED_RESOURCE_ID: "user-assigned-resource-id",
   USER_ASSIGNED_OBJECT_ID: "user-assigned-object-id"
 };
-var HttpMethod = {
-  GET: "get",
-  POST: "post"
-};
-var ProxyStatus = {
-  SUCCESS: HttpStatus.SUCCESS,
-  SUCCESS_RANGE_START: HttpStatus.SUCCESS_RANGE_START,
-  SUCCESS_RANGE_END: HttpStatus.SUCCESS_RANGE_END,
-  SERVER_ERROR: HttpStatus.SERVER_ERROR
+var HttpMethod2 = {
+  GET: "GET",
+  POST: "POST"
 };
 var REGION_ENVIRONMENT_VARIABLE = "REGION_NAME";
 var MSAL_FORCE_REGION = "MSAL_FORCE_REGION";
@@ -37761,10 +38094,12 @@ var Hash = {
 var CharSet = {
   CV_CHARSET: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 };
-var Constants2 = {
+var CACHE = {
+  KEY_SEPARATOR: "-"
+};
+var Constants = {
   MSAL_SKU: "msal.js.node",
   JWT_BEARER_ASSERTION_TYPE: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-  AUTHORIZATION_PENDING: "authorization_pending",
   HTTP_PROTOCOL: "http://",
   LOCALHOST: "localhost"
 };
@@ -37773,11 +38108,12 @@ var ApiId = {
   acquireTokenByUsernamePassword: 371,
   acquireTokenByDeviceCode: 671,
   acquireTokenByClientCredential: 771,
+  acquireTokenByOBO: 772,
+  acquireTokenWithManagedIdentity: 773,
   acquireTokenByCode: 871,
   acquireTokenByRefreshToken: 872
 };
 var JwtConstants = {
-  ALGORITHM: "alg",
   RSA_256: "RS256",
   PSS_256: "PS256",
   X5T_256: "x5t#S256",
@@ -37796,258 +38132,127 @@ var LOOPBACK_SERVER_CONSTANTS = {
 };
 var AZURE_ARC_SECRET_FILE_MAX_SIZE_BYTES = 4096;
 
-// node_modules/@azure/msal-node/dist/utils/NetworkUtils.mjs
-var NetworkUtils = class {
-  static getNetworkResponse(headers, body, statusCode) {
-    return {
-      headers,
-      body,
-      status: statusCode
-    };
-  }
-  /*
-   * Utility function that converts a URL object into an ordinary options object as expected by the
-   * http.request and https.request APIs.
-   * https://github.com/nodejs/node/blob/main/lib/internal/url.js#L1090
-   */
-  static urlToHttpOptions(url) {
-    const options = {
-      protocol: url.protocol,
-      hostname: url.hostname && url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname,
-      hash: url.hash,
-      search: url.search,
-      pathname: url.pathname,
-      path: `${url.pathname || ""}${url.search || ""}`,
-      href: url.href
-    };
-    if (url.port !== "") {
-      options.port = Number(url.port);
-    }
-    if (url.username || url.password) {
-      options.auth = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`;
-    }
-    return options;
-  }
-};
-
 // node_modules/@azure/msal-node/dist/network/HttpClient.mjs
-var import_http = __toESM(require("http"), 1);
-var import_https = __toESM(require("https"), 1);
 var HttpClient2 = class {
-  constructor(proxyUrl, customAgentOptions) {
-    this.proxyUrl = proxyUrl || "";
-    this.customAgentOptions = customAgentOptions || {};
-  }
   /**
-   * Http Get request
-   * @param url
-   * @param options
+   * Sends an HTTP GET request to the specified URL.
+   *
+   * This method handles GET requests with optional timeout support. The timeout
+   * is implemented using AbortController, which provides a clean way to cancel
+   * fetch requests that take too long to complete.
+   *
+   * @param url - The target URL for the GET request
+   * @param options - Optional request configuration including headers
+   * @param timeout - Optional timeout in milliseconds. If specified, the request
+   *                  will be aborted if it doesn't complete within this time
+   * @returns Promise that resolves to a NetworkResponse containing headers, body, and status
+   * @throws {AuthError} When the request times out or response parsing fails
+   * @throws {NetworkError} When the network request fails
    */
   async sendGetRequestAsync(url, options, timeout) {
-    if (this.proxyUrl) {
-      return networkRequestViaProxy(url, this.proxyUrl, HttpMethod.GET, options, this.customAgentOptions, timeout);
-    } else {
-      return networkRequestViaHttps(url, HttpMethod.GET, options, this.customAgentOptions, timeout);
-    }
+    return this.sendRequest(url, HttpMethod2.GET, options, timeout);
   }
   /**
-   * Http Post request
-   * @param url
-   * @param options
+   * Sends an HTTP POST request to the specified URL.
+   *
+   * This method handles POST requests with request body support. Currently,
+   * timeout functionality is not exposed for POST requests, but the underlying
+   * implementation supports it through the shared sendRequest method.
+   *
+   * @param url - The target URL for the POST request
+   * @param options - Optional request configuration including headers and body
+   * @returns Promise that resolves to a NetworkResponse containing headers, body, and status
+   * @throws {AuthError} When the request times out or response parsing fails
+   * @throws {NetworkError} When the network request fails
    */
   async sendPostRequestAsync(url, options) {
-    if (this.proxyUrl) {
-      return networkRequestViaProxy(url, this.proxyUrl, HttpMethod.POST, options, this.customAgentOptions);
-    } else {
-      return networkRequestViaHttps(url, HttpMethod.POST, options, this.customAgentOptions);
-    }
+    return this.sendRequest(url, HttpMethod2.POST, options);
   }
-};
-var networkRequestViaProxy = (destinationUrlString, proxyUrlString, httpMethod, options, agentOptions, timeout) => {
-  const destinationUrl = new URL(destinationUrlString);
-  const proxyUrl = new URL(proxyUrlString);
-  const headers = options?.headers || {};
-  const tunnelRequestOptions = {
-    host: proxyUrl.hostname,
-    port: proxyUrl.port,
-    method: "CONNECT",
-    path: destinationUrl.hostname,
-    headers
-  };
-  if (agentOptions && Object.keys(agentOptions).length) {
-    tunnelRequestOptions.agent = new import_http.default.Agent(agentOptions);
-  }
-  let postRequestStringContent = "";
-  if (httpMethod === HttpMethod.POST) {
-    const body = options?.body || "";
-    postRequestStringContent = `Content-Type: application/x-www-form-urlencoded\r
-Content-Length: ${body.length}\r
-\r
-${body}`;
-  } else {
+  /**
+   * Core HTTP request implementation using native fetch API.
+   *
+   * This method handles GET and POST HTTP requests with comprehensive
+   * timeout support and error handling. The timeout mechanism works as follows:
+   *
+   * 1. An AbortController is created for each request
+   * 2. If a timeout is specified, setTimeout is used to call abort() after the delay
+   * 3. The abort signal is passed to fetch, which will reject the promise if aborted
+   * 4. Cleanup occurs in both success and error cases to prevent timer leaks
+   *
+   * Error handling priority:
+   * 1. Timeout errors (AbortError) are converted to "Request timeout" messages
+   * 2. Network/connection errors are wrapped with "Network request failed" prefix
+   * 3. JSON parsing errors are wrapped with "Failed to parse response" prefix
+   *
+   * @param url - The target URL for the request
+   * @param method - HTTP method (GET or POST)
+   * @param options - Optional request configuration (headers, body)
+   * @param timeout - Optional timeout in milliseconds for request cancellation
+   * @returns Promise resolving to NetworkResponse with parsed JSON body
+   * @throws {AuthError} For timeouts or JSON parsing errors
+   * @throws {NetworkError} For network failures
+   */
+  async sendRequest(url, method, options, timeout) {
+    const controller = new AbortController();
+    let timeoutId;
     if (timeout) {
-      tunnelRequestOptions.timeout = timeout;
+      timeoutId = setTimeout(() => {
+        controller.abort();
+      }, timeout);
     }
-  }
-  const outgoingRequestString = `${httpMethod.toUpperCase()} ${destinationUrl.href} HTTP/1.1\r
-Host: ${destinationUrl.host}\r
-Connection: close\r
-` + postRequestStringContent + "\r\n";
-  return new Promise((resolve, reject) => {
-    const request5 = import_http.default.request(tunnelRequestOptions);
-    if (timeout) {
-      request5.on("timeout", () => {
-        request5.destroy();
-        reject(new Error("Request time out"));
-      });
+    const fetchOptions = {
+      method,
+      headers: getFetchHeaders(options),
+      signal: controller.signal
+      // Enable cancellation via AbortController
+    };
+    if (method === HttpMethod2.POST) {
+      fetchOptions.body = options?.body || "";
     }
-    request5.end();
-    request5.on("connect", (response, socket) => {
-      const proxyStatusCode = response?.statusCode || ProxyStatus.SERVER_ERROR;
-      if (proxyStatusCode < ProxyStatus.SUCCESS_RANGE_START || proxyStatusCode > ProxyStatus.SUCCESS_RANGE_END) {
-        request5.destroy();
-        socket.destroy();
-        reject(new Error(`Error connecting to proxy. Http status code: ${response.statusCode}. Http status message: ${response?.statusMessage || "Unknown"}`));
+    let response;
+    try {
+      response = await fetch(url, fetchOptions);
+    } catch (error2) {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
-      socket.write(outgoingRequestString);
-      const data = [];
-      socket.on("data", (chunk) => {
-        data.push(chunk);
-      });
-      socket.on("end", () => {
-        const dataString = Buffer.concat([...data]).toString();
-        const dataStringArray = dataString.split("\r\n");
-        const httpStatusCode = parseInt(dataStringArray[0].split(" ")[1]);
-        const statusMessage = dataStringArray[0].split(" ").slice(2).join(" ");
-        const body = dataStringArray[dataStringArray.length - 1];
-        const headersArray = dataStringArray.slice(1, dataStringArray.length - 2);
-        const entries = /* @__PURE__ */ new Map();
-        headersArray.forEach((header) => {
-          const headerKeyValue = header.split(new RegExp(/:\s(.*)/s));
-          const headerKey = headerKeyValue[0];
-          let headerValue = headerKeyValue[1];
-          try {
-            const object = JSON.parse(headerValue);
-            if (object && typeof object === "object") {
-              headerValue = object;
-            }
-          } catch (e) {
-          }
-          entries.set(headerKey, headerValue);
-        });
-        const headers2 = Object.fromEntries(entries);
-        const parsedHeaders = headers2;
-        const networkResponse = NetworkUtils.getNetworkResponse(parsedHeaders, parseBody(httpStatusCode, statusMessage, parsedHeaders, body), httpStatusCode);
-        if ((httpStatusCode < HttpStatus.SUCCESS_RANGE_START || httpStatusCode > HttpStatus.SUCCESS_RANGE_END) && // do not destroy the request for the device code flow
-        networkResponse.body["error"] !== Constants2.AUTHORIZATION_PENDING) {
-          request5.destroy();
-        }
-        resolve(networkResponse);
-      });
-      socket.on("error", (chunk) => {
-        request5.destroy();
-        socket.destroy();
-        reject(new Error(chunk.toString()));
-      });
-    });
-    request5.on("error", (chunk) => {
-      request5.destroy();
-      reject(new Error(chunk.toString()));
-    });
+      if (error2 instanceof Error && error2.name === "AbortError") {
+        throw createAuthError(ClientAuthErrorCodes_exports.networkError, "Request timeout");
+      }
+      const baseAuthError = createAuthError(ClientAuthErrorCodes_exports.networkError, `Network request failed: ${error2 instanceof Error ? error2.message : "unknown"}`);
+      throw createNetworkError(baseAuthError, void 0, void 0, error2 instanceof Error ? error2 : void 0);
+    }
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    try {
+      return {
+        headers: getHeaderDict(response.headers),
+        body: await response.json(),
+        status: response.status
+      };
+    } catch (error2) {
+      throw createAuthError(ClientAuthErrorCodes_exports.tokenParsingError, `Failed to parse response: ${error2 instanceof Error ? error2.message : "unknown"}`);
+    }
+  }
+};
+function getHeaderDict(headers) {
+  const headerDict = {};
+  headers.forEach((value, key) => {
+    headerDict[key] = value;
   });
-};
-var networkRequestViaHttps = (urlString, httpMethod, options, agentOptions, timeout) => {
-  const isPostRequest = httpMethod === HttpMethod.POST;
-  const body = options?.body || "";
-  const url = new URL(urlString);
-  const headers = options?.headers || {};
-  const customOptions = {
-    method: httpMethod,
-    headers,
-    ...NetworkUtils.urlToHttpOptions(url)
-  };
-  if (agentOptions && Object.keys(agentOptions).length) {
-    customOptions.agent = new import_https.default.Agent(agentOptions);
+  return headerDict;
+}
+function getFetchHeaders(options) {
+  const headers = new Headers();
+  if (!(options && options.headers)) {
+    return headers;
   }
-  if (isPostRequest) {
-    customOptions.headers = {
-      ...customOptions.headers,
-      "Content-Length": body.length
-    };
-  } else {
-    if (timeout) {
-      customOptions.timeout = timeout;
-    }
-  }
-  return new Promise((resolve, reject) => {
-    let request5;
-    if (customOptions.protocol === "http:") {
-      request5 = import_http.default.request(customOptions);
-    } else {
-      request5 = import_https.default.request(customOptions);
-    }
-    if (isPostRequest) {
-      request5.write(body);
-    }
-    if (timeout) {
-      request5.on("timeout", () => {
-        request5.destroy();
-        reject(new Error("Request time out"));
-      });
-    }
-    request5.end();
-    request5.on("response", (response) => {
-      const headers2 = response.headers;
-      const statusCode = response.statusCode;
-      const statusMessage = response.statusMessage;
-      const data = [];
-      response.on("data", (chunk) => {
-        data.push(chunk);
-      });
-      response.on("end", () => {
-        const body2 = Buffer.concat([...data]).toString();
-        const parsedHeaders = headers2;
-        const networkResponse = NetworkUtils.getNetworkResponse(parsedHeaders, parseBody(statusCode, statusMessage, parsedHeaders, body2), statusCode);
-        if ((statusCode < HttpStatus.SUCCESS_RANGE_START || statusCode > HttpStatus.SUCCESS_RANGE_END) && // do not destroy the request for the device code flow
-        networkResponse.body["error"] !== Constants2.AUTHORIZATION_PENDING) {
-          request5.destroy();
-        }
-        resolve(networkResponse);
-      });
-    });
-    request5.on("error", (chunk) => {
-      request5.destroy();
-      reject(new Error(chunk.toString()));
-    });
+  Object.entries(options.headers).forEach(([key, value]) => {
+    headers.append(key, value);
   });
-};
-var parseBody = (statusCode, statusMessage, headers, body) => {
-  let parsedBody;
-  try {
-    parsedBody = JSON.parse(body);
-  } catch (error2) {
-    let errorType;
-    let errorDescriptionHelper;
-    if (statusCode >= HttpStatus.CLIENT_ERROR_RANGE_START && statusCode <= HttpStatus.CLIENT_ERROR_RANGE_END) {
-      errorType = "client_error";
-      errorDescriptionHelper = "A client";
-    } else if (statusCode >= HttpStatus.SERVER_ERROR_RANGE_START && statusCode <= HttpStatus.SERVER_ERROR_RANGE_END) {
-      errorType = "server_error";
-      errorDescriptionHelper = "A server";
-    } else {
-      errorType = "unknown_error";
-      errorDescriptionHelper = "An unknown";
-    }
-    parsedBody = {
-      error: errorType,
-      error_description: `${errorDescriptionHelper} error occured.
-Http status code: ${statusCode}
-Http status message: ${statusMessage || "Unknown"}
-Headers: ${JSON.stringify(headers)}`
-    };
-  }
-  return parsedBody;
-};
+  return headers;
+}
 
 // node_modules/@azure/msal-node/dist/error/ManagedIdentityErrorCodes.mjs
 var invalidFileExtension = "invalid_file_extension";
@@ -38179,6 +38384,10 @@ var NodeAuthErrorMessage = {
   thumbprintMissing: {
     code: "thumbprint_missing_from_client_certificate",
     desc: "Client certificate does not contain a SHA-1 or SHA-256 thumbprint."
+  },
+  redirectUriNotSupported: {
+    code: "redirect_uri_not_supported",
+    desc: "RedirectUri is not supported in this scenario. Please remove redirectUri from the request."
   }
 };
 var NodeAuthError = class _NodeAuthError extends AuthError {
@@ -38234,34 +38443,35 @@ var NodeAuthError = class _NodeAuthError extends AuthError {
   static createThumbprintMissingError() {
     return new _NodeAuthError(NodeAuthErrorMessage.thumbprintMissing.code, NodeAuthErrorMessage.thumbprintMissing.desc);
   }
+  /**
+   * Creates an error thrown when redirectUri is provided in an unsupported scenario
+   */
+  static createRedirectUriNotSupportedError() {
+    return new _NodeAuthError(NodeAuthErrorMessage.redirectUriNotSupported.code, NodeAuthErrorMessage.redirectUriNotSupported.desc);
+  }
 };
 
 // node_modules/@azure/msal-node/dist/config/Configuration.mjs
 var DEFAULT_AUTH_OPTIONS = {
-  clientId: Constants.EMPTY_STRING,
-  authority: Constants.DEFAULT_AUTHORITY,
-  clientSecret: Constants.EMPTY_STRING,
-  clientAssertion: Constants.EMPTY_STRING,
+  clientId: "",
+  authority: Constants_exports.DEFAULT_AUTHORITY,
+  clientSecret: "",
+  clientAssertion: "",
   clientCertificate: {
-    thumbprint: Constants.EMPTY_STRING,
-    thumbprintSha256: Constants.EMPTY_STRING,
-    privateKey: Constants.EMPTY_STRING,
-    x5c: Constants.EMPTY_STRING
+    thumbprint: "",
+    thumbprintSha256: "",
+    privateKey: "",
+    x5c: ""
   },
   knownAuthorities: [],
-  cloudDiscoveryMetadata: Constants.EMPTY_STRING,
-  authorityMetadata: Constants.EMPTY_STRING,
+  cloudDiscoveryMetadata: "",
+  authorityMetadata: "",
   clientCapabilities: [],
-  protocolMode: ProtocolMode.AAD,
   azureCloudOptions: {
     azureCloudInstance: AzureCloudInstance.None,
-    tenant: Constants.EMPTY_STRING
+    tenant: ""
   },
-  skipAuthorityMetadataCache: false,
-  encodeExtraQueryParams: false
-};
-var DEFAULT_CACHE_OPTIONS2 = {
-  claimsBasedCachingEnabled: false
+  isMcp: false
 };
 var DEFAULT_LOGGER_OPTIONS = {
   loggerCallback: () => {
@@ -38272,20 +38482,19 @@ var DEFAULT_LOGGER_OPTIONS = {
 var DEFAULT_SYSTEM_OPTIONS2 = {
   loggerOptions: DEFAULT_LOGGER_OPTIONS,
   networkClient: new HttpClient2(),
-  proxyUrl: Constants.EMPTY_STRING,
-  customAgentOptions: {},
-  disableInternalRetries: false
+  disableInternalRetries: false,
+  protocolMode: ProtocolMode.AAD
 };
 var DEFAULT_TELEMETRY_OPTIONS2 = {
   application: {
-    appName: Constants.EMPTY_STRING,
-    appVersion: Constants.EMPTY_STRING
+    appName: "",
+    appVersion: ""
   }
 };
 function buildAppConfiguration({ auth, broker, cache, system, telemetry }) {
   const systemOptions = {
     ...DEFAULT_SYSTEM_OPTIONS2,
-    networkClient: new HttpClient2(system?.proxyUrl, system?.customAgentOptions),
+    networkClient: new HttpClient2(),
     loggerOptions: system?.loggerOptions || DEFAULT_LOGGER_OPTIONS,
     disableInternalRetries: system?.disableInternalRetries || false
   };
@@ -38295,21 +38504,22 @@ function buildAppConfiguration({ auth, broker, cache, system, telemetry }) {
   return {
     auth: { ...DEFAULT_AUTH_OPTIONS, ...auth },
     broker: { ...broker },
-    cache: { ...DEFAULT_CACHE_OPTIONS2, ...cache },
+    cache: { ...cache },
     system: { ...systemOptions, ...system },
     telemetry: { ...DEFAULT_TELEMETRY_OPTIONS2, ...telemetry }
   };
 }
-function buildManagedIdentityConfiguration({ managedIdentityIdParams, system }) {
+function buildManagedIdentityConfiguration({ clientCapabilities, managedIdentityIdParams, system }) {
   const managedIdentityId = new ManagedIdentityId(managedIdentityIdParams);
   const loggerOptions = system?.loggerOptions || DEFAULT_LOGGER_OPTIONS;
   let networkClient;
   if (system?.networkClient) {
     networkClient = system.networkClient;
   } else {
-    networkClient = new HttpClient2(system?.proxyUrl, system?.customAgentOptions);
+    networkClient = new HttpClient2();
   }
   return {
+    clientCapabilities: clientCapabilities || [],
     managedIdentityId,
     system: {
       loggerOptions,
@@ -38400,14 +38610,14 @@ var EncodingUtils = class _EncodingUtils {
    * @param str text
    */
   static base64Encode(str, encoding) {
-    return Buffer.from(str, encoding).toString("base64");
+    return Buffer.from(str, encoding).toString(Constants_exports.EncodingTypes.BASE64);
   }
   /**
    * encode a URL
    * @param str
    */
   static base64EncodeUrl(str, encoding) {
-    return _EncodingUtils.base64Encode(str, encoding).replace(/=/g, Constants.EMPTY_STRING).replace(/\+/g, "-").replace(/\//g, "_");
+    return _EncodingUtils.base64Encode(str, encoding).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
   }
   /**
    * 'utf8': Multibyte encoded Unicode characters. Many web pages and other document formats use UTF-8.
@@ -38416,7 +38626,7 @@ var EncodingUtils = class _EncodingUtils {
    * @param base64Str Base64 encoded text
    */
   static base64Decode(base64Str) {
-    return Buffer.from(base64Str, "base64").toString("utf8");
+    return Buffer.from(base64Str, Constants_exports.EncodingTypes.BASE64).toString("utf8");
   }
   /**
    * @param base64Str Base64 encoded Url
@@ -38471,7 +38681,7 @@ var PkceGenerator = class {
       const index = byte % CharSet.CV_CHARSET.length;
       charArr.push(CharSet.CV_CHARSET[index]);
     }
-    const verifier = charArr.join(Constants.EMPTY_STRING);
+    const verifier = charArr.join("");
     return EncodingUtils.base64EncodeUrl(verifier);
   }
   /**
@@ -38479,7 +38689,7 @@ var PkceGenerator = class {
    * @param codeVerifier
    */
   generateCodeChallengeFromVerifier(codeVerifier) {
-    return EncodingUtils.base64EncodeUrl(this.hashUtils.sha256(codeVerifier).toString("base64"), "base64");
+    return EncodingUtils.base64EncodeUrl(this.hashUtils.sha256(codeVerifier).toString(Constants_exports.EncodingTypes.BASE64), Constants_exports.EncodingTypes.BASE64);
   }
 };
 
@@ -38560,14 +38770,39 @@ var CryptoProvider = class {
    * Returns the SHA-256 hash of an input string
    */
   async hashString(plainText) {
-    return EncodingUtils.base64EncodeUrl(this.hashUtils.sha256(plainText).toString("base64"), "base64");
+    return EncodingUtils.base64EncodeUrl(this.hashUtils.sha256(plainText).toString(Constants_exports.EncodingTypes.BASE64), Constants_exports.EncodingTypes.BASE64);
   }
 };
+
+// node_modules/@azure/msal-node/dist/cache/CacheHelpers.mjs
+function generateCredentialKey(credential) {
+  const familyId = credential.credentialType === Constants_exports.CredentialType.REFRESH_TOKEN && credential.familyId || credential.clientId;
+  const scheme = credential.tokenType && credential.tokenType.toLowerCase() !== Constants_exports.AuthenticationScheme.BEARER.toLowerCase() ? credential.tokenType.toLowerCase() : "";
+  const credentialKey = [
+    credential.homeAccountId,
+    credential.environment,
+    credential.credentialType,
+    familyId,
+    credential.realm || "",
+    credential.target || "",
+    scheme
+  ];
+  return credentialKey.join(CACHE.KEY_SEPARATOR).toLowerCase();
+}
+function generateAccountKey(account) {
+  const homeTenantId = account.homeAccountId.split(".")[1];
+  const accountKey = [
+    account.homeAccountId,
+    account.environment,
+    homeTenantId || account.tenantId || ""
+  ];
+  return accountKey.join(CACHE.KEY_SEPARATOR).toLowerCase();
+}
 
 // node_modules/@azure/msal-node/dist/cache/NodeStorage.mjs
 var NodeStorage = class extends CacheManager {
   constructor(logger31, clientId, cryptoImpl, staticAuthorityOptions) {
-    super(clientId, cryptoImpl, logger31, staticAuthorityOptions);
+    super(clientId, cryptoImpl, logger31, new StubPerformanceClient(), staticAuthorityOptions);
     this.cache = {};
     this.changeEmitters = [];
     this.logger = logger31;
@@ -38602,7 +38837,7 @@ var NodeStorage = class extends CacheManager {
       if (typeof value !== "object") {
         continue;
       }
-      if (value instanceof AccountEntity) {
+      if (AccountEntityUtils_exports.isAccountEntity(value)) {
         inMemoryCache.accounts[key] = value;
       } else if (CacheHelpers_exports.isIdTokenEntity(value)) {
         inMemoryCache.idTokens[key] = value;
@@ -38638,7 +38873,7 @@ var NodeStorage = class extends CacheManager {
    * gets the current in memory cache for the client
    */
   getInMemoryCache() {
-    this.logger.trace("Getting in-memory cache");
+    this.logger.trace("Getting in-memory cache", "");
     const inMemoryCache = this.cacheToInMemoryCache(this.getCache());
     return inMemoryCache;
   }
@@ -38647,7 +38882,7 @@ var NodeStorage = class extends CacheManager {
    * @param inMemoryCache - key value map in memory
    */
   setInMemoryCache(inMemoryCache) {
-    this.logger.trace("Setting in-memory cache");
+    this.logger.trace("Setting in-memory cache", "");
     const cache = this.inMemoryCacheToCache(inMemoryCache);
     this.setCache(cache);
     this.emitChange();
@@ -38656,7 +38891,7 @@ var NodeStorage = class extends CacheManager {
    * get the current cache key-value store
    */
   getCache() {
-    this.logger.trace("Getting cache key-value store");
+    this.logger.trace("Getting cache key-value store", "");
     return this.cache;
   }
   /**
@@ -38664,7 +38899,7 @@ var NodeStorage = class extends CacheManager {
    * @param cacheMap - key value map
    */
   setCache(cache) {
-    this.logger.trace("Setting cache key value store");
+    this.logger.trace("Setting cache key value store", "");
     this.cache = cache;
     this.emitChange();
   }
@@ -38673,7 +38908,7 @@ var NodeStorage = class extends CacheManager {
    * @param key - lookup key for the cache entry
    */
   getItem(key) {
-    this.logger.tracePii(`Item key: ${key}`);
+    this.logger.tracePii(`Item key: ${key}`, "");
     const cache = this.getCache();
     return cache[key];
   }
@@ -38683,10 +38918,16 @@ var NodeStorage = class extends CacheManager {
    * @param value - value of the cache entry
    */
   setItem(key, value) {
-    this.logger.tracePii(`Item key: ${key}`);
+    this.logger.tracePii(`Item key: ${key}`, "");
     const cache = this.getCache();
     cache[key] = value;
     this.setCache(cache);
+  }
+  generateCredentialKey(credential) {
+    return generateCredentialKey(credential);
+  }
+  generateAccountKey(account) {
+    return generateAccountKey(account);
   }
   getAccountKeys() {
     const inMemoryCache = this.getInMemoryCache();
@@ -38709,14 +38950,14 @@ var NodeStorage = class extends CacheManager {
    */
   getAccount(accountKey) {
     const cachedAccount = this.getItem(accountKey);
-    return cachedAccount ? Object.assign(new AccountEntity(), this.getItem(accountKey)) : null;
+    return cachedAccount && typeof cachedAccount === "object" ? { ...cachedAccount } : null;
   }
   /**
    * set account entity
    * @param account - cache value to be set of type AccountEntity
    */
   async setAccount(account) {
-    const accountKey = account.generateAccountKey();
+    const accountKey = this.generateAccountKey(AccountEntityUtils_exports.getAccountInfo(account));
     this.setItem(accountKey, account);
   }
   /**
@@ -38735,7 +38976,7 @@ var NodeStorage = class extends CacheManager {
    * @param idToken - cache value to be set of type IdTokenEntity
    */
   async setIdTokenCredential(idToken) {
-    const idTokenKey = CacheHelpers_exports.generateCredentialKey(idToken);
+    const idTokenKey = this.generateCredentialKey(idToken);
     this.setItem(idTokenKey, idToken);
   }
   /**
@@ -38754,7 +38995,7 @@ var NodeStorage = class extends CacheManager {
    * @param accessToken -  cache value to be set of type AccessTokenEntity
    */
   async setAccessTokenCredential(accessToken) {
-    const accessTokenKey = CacheHelpers_exports.generateCredentialKey(accessToken);
+    const accessTokenKey = this.generateCredentialKey(accessToken);
     this.setItem(accessTokenKey, accessToken);
   }
   /**
@@ -38773,7 +39014,7 @@ var NodeStorage = class extends CacheManager {
    * @param refreshToken - cache value to be set of type RefreshTokenEntity
    */
   async setRefreshTokenCredential(refreshToken) {
-    const refreshTokenKey = CacheHelpers_exports.generateCredentialKey(refreshToken);
+    const refreshTokenKey = this.generateCredentialKey(refreshToken);
     this.setItem(refreshTokenKey, refreshToken);
   }
   /**
@@ -38866,7 +39107,7 @@ var NodeStorage = class extends CacheManager {
    * @param inMemory - key value map of the cache
    */
   removeItem(key) {
-    this.logger.tracePii(`Item key: ${key}`);
+    this.logger.tracePii(`Item key: ${key}`, "");
     let result = false;
     const cache = this.getCache();
     if (!!cache[key]) {
@@ -38897,7 +39138,7 @@ var NodeStorage = class extends CacheManager {
    * Gets all keys in window.
    */
   getKeys() {
-    this.logger.trace("Retrieving all cache keys");
+    this.logger.trace("Retrieving all cache keys", "");
     const cache = this.getCache();
     return [...Object.keys(cache)];
   }
@@ -38905,7 +39146,7 @@ var NodeStorage = class extends CacheManager {
    * Clears all cache entries created by MSAL (except tokens).
    */
   clear() {
-    this.logger.trace("Clearing cache entries created by MSAL");
+    this.logger.trace("Clearing cache entries created by MSAL", "");
     const cacheKeys = this.getKeys();
     cacheKeys.forEach((key) => {
       this.removeItem(key);
@@ -38930,16 +39171,16 @@ var NodeStorage = class extends CacheManager {
    * Updates a credential's cache key if the current cache key is outdated
    */
   updateCredentialCacheKey(currentCacheKey, credential) {
-    const updatedCacheKey = CacheHelpers_exports.generateCredentialKey(credential);
+    const updatedCacheKey = this.generateCredentialKey(credential);
     if (currentCacheKey !== updatedCacheKey) {
       const cacheItem = this.getItem(currentCacheKey);
       if (cacheItem) {
         this.removeItem(currentCacheKey);
         this.setItem(updatedCacheKey, cacheItem);
-        this.logger.verbose(`Updated an outdated ${credential.credentialType} cache key`);
+        this.logger.verbose(`Updated an outdated ${credential.credentialType} cache key`, "");
         return updatedCacheKey;
       } else {
-        this.logger.error(`Attempted to update an outdated ${credential.credentialType} cache key but no item matching the outdated key was found in storage`);
+        this.logger.error(`Attempted to update an outdated ${credential.credentialType} cache key but no item matching the outdated key was found in storage`, "");
       }
     }
     return currentCacheKey;
@@ -38974,13 +39215,13 @@ var TokenCache = class {
    * Serializes in memory cache to JSON
    */
   serialize() {
-    this.logger.trace("Serializing in-memory cache");
+    this.logger.trace("Serializing in-memory cache", "");
     let finalState = Serializer.serializeAllCache(this.storage.getInMemoryCache());
     if (this.cacheSnapshot) {
-      this.logger.trace("Reading cache snapshot from disk");
+      this.logger.trace("Reading cache snapshot from disk", "");
       finalState = this.mergeState(JSON.parse(this.cacheSnapshot), finalState);
     } else {
-      this.logger.trace("No cache snapshot to merge");
+      this.logger.trace("No cache snapshot to merge", "");
     }
     this.cacheHasChanged = false;
     return JSON.stringify(finalState);
@@ -38990,14 +39231,14 @@ var TokenCache = class {
    * @param cache - blob formatted cache
    */
   deserialize(cache) {
-    this.logger.trace("Deserializing JSON to in-memory cache");
+    this.logger.trace("Deserializing JSON to in-memory cache", "");
     this.cacheSnapshot = cache;
     if (this.cacheSnapshot) {
-      this.logger.trace("Reading cache snapshot from disk");
+      this.logger.trace("Reading cache snapshot from disk", "");
       const deserializedCache = Deserializer.deserializeAllCache(this.overlayDefaults(JSON.parse(this.cacheSnapshot)));
       this.storage.setInMemoryCache(deserializedCache);
     } else {
-      this.logger.trace("No cache snapshot to deserialize");
+      this.logger.trace("No cache snapshot to deserialize", "");
     }
   }
   /**
@@ -39016,15 +39257,15 @@ var TokenCache = class {
   /**
    * API that retrieves all accounts currently in cache to the user
    */
-  async getAllAccounts() {
-    this.logger.trace("getAllAccounts called");
+  async getAllAccounts(correlationId = new CryptoProvider().createNewGuid()) {
+    this.logger.trace("getAllAccounts called", correlationId);
     let cacheContext;
     try {
       if (this.persistence) {
         cacheContext = new TokenCacheContext(this, false);
         await this.persistence.beforeCacheAccess(cacheContext);
       }
-      return this.storage.getAllAccounts();
+      return this.storage.getAllAccounts({}, correlationId);
     } finally {
       if (this.persistence && cacheContext) {
         await this.persistence.afterCacheAccess(cacheContext);
@@ -39063,15 +39304,15 @@ var TokenCache = class {
    * API to remove a specific account and the relevant data from cache
    * @param account - AccountInfo passed by the user
    */
-  async removeAccount(account) {
-    this.logger.trace("removeAccount called");
+  async removeAccount(account, correlationId) {
+    this.logger.trace("removeAccount called", correlationId || "");
     let cacheContext;
     try {
       if (this.persistence) {
         cacheContext = new TokenCacheContext(this, true);
         await this.persistence.beforeCacheAccess(cacheContext);
       }
-      await this.storage.removeAccount(AccountEntity.generateAccountCacheKey(account));
+      this.storage.removeAccount(account, correlationId || new GuidGenerator().generateGuid());
     } finally {
       if (this.persistence && cacheContext) {
         await this.persistence.afterCacheAccess(cacheContext);
@@ -39083,10 +39324,10 @@ var TokenCache = class {
    */
   async overwriteCache() {
     if (!this.persistence) {
-      this.logger.info("No persistence layer specified, cache cannot be overwritten");
+      this.logger.info("No persistence layer specified, cache cannot be overwritten", "");
       return;
     }
-    this.logger.info("Overwriting in-memory cache with persistent cache");
+    this.logger.info("Overwriting in-memory cache with persistent cache", "");
     this.storage.clear();
     const cacheContext = new TokenCacheContext(this, false);
     await this.persistence.beforeCacheAccess(cacheContext);
@@ -39106,7 +39347,7 @@ var TokenCache = class {
    * @param currentState - current cache state in the library
    */
   mergeState(oldState, currentState) {
-    this.logger.trace("Merging in-memory cache with cache snapshot");
+    this.logger.trace("Merging in-memory cache with cache snapshot", "");
     const stateAfterRemoval = this.mergeRemovals(oldState, currentState);
     return this.mergeUpdates(stateAfterRemoval, currentState);
   }
@@ -39143,7 +39384,7 @@ var TokenCache = class {
    * @param newState - updated cache
    */
   mergeRemovals(oldState, newState) {
-    this.logger.trace("Remove updated entries in cache");
+    this.logger.trace("Remove updated entries in cache", "");
     const accounts = oldState.Account ? this.mergeRemovalsDict(oldState.Account, newState.Account) : oldState.Account;
     const accessTokens = oldState.AccessToken ? this.mergeRemovalsDict(oldState.AccessToken, newState.AccessToken) : oldState.AccessToken;
     const refreshTokens = oldState.RefreshToken ? this.mergeRemovalsDict(oldState.RefreshToken, newState.RefreshToken) : oldState.RefreshToken;
@@ -39177,7 +39418,7 @@ var TokenCache = class {
    * @param passedInCache - cache read from the blob
    */
   overlayDefaults(passedInCache) {
-    this.logger.trace("Overlaying input cache with the default cache");
+    this.logger.trace("Overlaying input cache with the default cache", "");
     return {
       Account: {
         ...defaultSerializedCache.Account,
@@ -39205,6 +39446,17 @@ var TokenCache = class {
 
 // node_modules/@azure/msal-node/dist/client/ClientAssertion.mjs
 var import_jsonwebtoken = __toESM(require_jsonwebtoken(), 1);
+
+// node_modules/@azure/msal-node/dist/error/ClientAuthErrorCodes.mjs
+var missingTenantIdError = "missing_tenant_id_error";
+var userTimeoutReached = "user_timeout_reached";
+var invalidAssertion = "invalid_assertion";
+var invalidClientCredential = "invalid_client_credential";
+var deviceCodePollingCancelled = "device_code_polling_cancelled";
+var deviceCodeExpired = "device_code_expired";
+var deviceCodeUnknownError = "device_code_unknown_error";
+
+// node_modules/@azure/msal-node/dist/client/ClientAssertion.mjs
 var ClientAssertion = class _ClientAssertion {
   /**
    * Initialize the ClientAssertion class from the clientAssertion passed by the user
@@ -39264,7 +39516,7 @@ var ClientAssertion = class _ClientAssertion {
     if (this.jwt) {
       return this.jwt;
     }
-    throw createClientAuthError(ClientAuthErrorCodes_exports.invalidAssertion);
+    throw createClientAuthError(invalidAssertion);
   }
   /**
    * JWT format and required claims specified: https://tools.ietf.org/html/rfc7523#section-3
@@ -39280,7 +39532,7 @@ var ClientAssertion = class _ClientAssertion {
     };
     const thumbprintHeader = this.useSha256 ? JwtConstants.X5T_256 : JwtConstants.X5T;
     Object.assign(header, {
-      [thumbprintHeader]: EncodingUtils.base64EncodeUrl(this.thumbprint, "hex")
+      [thumbprintHeader]: EncodingUtils.base64EncodeUrl(this.thumbprint, Constants_exports.EncodingTypes.HEX)
     });
     if (this.publicCertificate) {
       Object.assign(header, {
@@ -39313,7 +39565,7 @@ var ClientAssertion = class _ClientAssertion {
     const certs = [];
     let matches;
     while ((matches = regexToFindCerts.exec(publicCertificate)) !== null) {
-      certs.push(matches[1].replace(/\r*\n/g, Constants.EMPTY_STRING));
+      certs.push(matches[1].replace(/\r*\n/g, ""));
     }
     return certs;
   }
@@ -39321,7 +39573,54 @@ var ClientAssertion = class _ClientAssertion {
 
 // node_modules/@azure/msal-node/dist/packageMetadata.mjs
 var name2 = "@azure/msal-node";
-var version2 = "3.5.1";
+var version2 = "5.1.1";
+
+// node_modules/@azure/msal-node/dist/client/BaseClient.mjs
+var BaseClient = class {
+  constructor(configuration) {
+    this.config = buildClientConfiguration(configuration);
+    this.logger = new Logger(this.config.loggerOptions, name2, version2);
+    this.cryptoUtils = this.config.cryptoInterface;
+    this.cacheManager = this.config.storageInterface;
+    this.networkClient = this.config.networkInterface;
+    this.serverTelemetryManager = this.config.serverTelemetryManager;
+    this.authority = this.config.authOptions.authority;
+    this.performanceClient = new StubPerformanceClient();
+  }
+  /**
+   * Creates default headers for requests to token endpoint
+   */
+  createTokenRequestHeaders(ccsCred) {
+    return Token_exports.createTokenRequestHeaders(this.logger, false, ccsCred);
+  }
+  /**
+   * Http post to token endpoint
+   * @param tokenEndpoint
+   * @param queryString
+   * @param headers
+   * @param thumbprint
+   */
+  async executePostToTokenEndpoint(tokenEndpoint, queryString, headers, thumbprint, correlationId) {
+    return Token_exports.executePostToTokenEndpoint(tokenEndpoint, queryString, headers, thumbprint, correlationId, this.cacheManager, this.networkClient, this.logger, this.performanceClient, this.serverTelemetryManager);
+  }
+  /**
+   * Wraps sendPostRequestAsync with necessary preflight and postflight logic
+   * @param thumbprint - Request thumbprint for throttling
+   * @param tokenEndpoint - Endpoint to make the POST to
+   * @param options - Body and Headers to include on the POST request
+   * @param correlationId - CorrelationId for telemetry
+   */
+  async sendPostRequest(thumbprint, tokenEndpoint, options, correlationId) {
+    return Token_exports.sendPostRequest(thumbprint, tokenEndpoint, options, correlationId, this.cacheManager, this.networkClient, this.logger, this.performanceClient);
+  }
+  /**
+   * Creates query string for the /token request
+   * @param request
+   */
+  createTokenQueryParameters(request5) {
+    return Token_exports.createTokenQueryParameters(request5, this.config.authOptions.clientId, this.config.authOptions.redirectUri, this.performanceClient);
+  }
+};
 
 // node_modules/@azure/msal-node/dist/client/UsernamePasswordClient.mjs
 var UsernamePasswordClient = class extends BaseClient {
@@ -39334,12 +39633,12 @@ var UsernamePasswordClient = class extends BaseClient {
    * @param request - CommonUsernamePasswordRequest
    */
   async acquireToken(request5) {
-    this.logger.info("in acquireToken call in username-password client");
+    this.logger.info("in acquireToken call in username-password client", request5.correlationId);
     const reqTimestamp = TimeUtils_exports.nowSeconds();
     const response = await this.executeTokenRequest(this.authority, request5);
-    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.config.serializableCache, this.config.persistencePlugin);
-    responseHandler.validateTokenResponse(response.body);
-    const tokenResponse = responseHandler.handleServerTokenResponse(response.body, this.authority, reqTimestamp, request5);
+    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.performanceClient, this.config.serializableCache, this.config.persistencePlugin);
+    responseHandler.validateTokenResponse(response.body, request5.correlationId);
+    const tokenResponse = responseHandler.handleServerTokenResponse(response.body, this.authority, reqTimestamp, request5, ApiId.acquireTokenByUsernamePassword);
     return tokenResponse;
   }
   /**
@@ -39378,8 +39677,8 @@ var UsernamePasswordClient = class extends BaseClient {
     RequestParameterBuilder_exports.addUsername(parameters, request5.username);
     RequestParameterBuilder_exports.addPassword(parameters, request5.password);
     RequestParameterBuilder_exports.addScopes(parameters, request5.scopes);
-    RequestParameterBuilder_exports.addResponseType(parameters, OAuthResponseType.IDTOKEN_TOKEN);
-    RequestParameterBuilder_exports.addGrantType(parameters, GrantType.RESOURCE_OWNER_PASSWORD_GRANT);
+    RequestParameterBuilder_exports.addResponseType(parameters, Constants_exports.OAuthResponseType.IDTOKEN_TOKEN);
+    RequestParameterBuilder_exports.addGrantType(parameters, Constants_exports.GrantType.RESOURCE_OWNER_PASSWORD_GRANT);
     RequestParameterBuilder_exports.addClientInfo(parameters);
     RequestParameterBuilder_exports.addLibraryInfo(parameters, this.config.libraryInfo);
     RequestParameterBuilder_exports.addApplicationTelemetry(parameters, this.config.telemetry.application);
@@ -39415,20 +39714,20 @@ function getAuthCodeRequestUrl(config, authority, request5, logger31) {
     redirectUri: request5.redirectUri || ""
   }, request5, logger31);
   RequestParameterBuilder_exports.addLibraryInfo(parameters, {
-    sku: Constants2.MSAL_SKU,
+    sku: Constants.MSAL_SKU,
     version: version2,
     cpu: process.arch || "",
     os: process.platform || ""
   });
-  if (config.auth.protocolMode !== ProtocolMode.OIDC) {
+  if (config.system.protocolMode !== ProtocolMode.OIDC) {
     RequestParameterBuilder_exports.addApplicationTelemetry(parameters, config.telemetry.application);
   }
-  RequestParameterBuilder_exports.addResponseType(parameters, OAuthResponseType.CODE);
+  RequestParameterBuilder_exports.addResponseType(parameters, Constants_exports.OAuthResponseType.CODE);
   if (request5.codeChallenge && request5.codeChallengeMethod) {
     RequestParameterBuilder_exports.addCodeChallengeParams(parameters, request5.codeChallenge, request5.codeChallengeMethod);
   }
-  RequestParameterBuilder_exports.addExtraQueryParameters(parameters, request5.extraQueryParameters || {});
-  return Authorize_exports.getAuthorizeUrl(authority, parameters, config.auth.encodeExtraQueryParams, request5.extraQueryParameters);
+  RequestParameterBuilder_exports.addExtraParameters(parameters, request5.extraQueryParameters || {});
+  return Authorize_exports.getAuthorizeUrl(authority, parameters);
 }
 
 // node_modules/@azure/msal-node/dist/client/ClientApplication.mjs
@@ -39453,12 +39752,12 @@ var ClientApplication = class {
    * `acquireTokenByCode(AuthorizationCodeRequest)`.
    */
   async getAuthCodeUrl(request5) {
-    this.logger.info("getAuthCodeUrl called", request5.correlationId);
+    this.logger.info("getAuthCodeUrl called", request5.correlationId || "");
     const validRequest = {
       ...request5,
       ...await this.initializeBaseRequest(request5),
-      responseMode: request5.responseMode || ResponseMode.QUERY,
-      authenticationScheme: AuthenticationScheme.BEARER,
+      responseMode: request5.responseMode || Constants_exports.ResponseMode.QUERY,
+      authenticationScheme: Constants_exports.AuthenticationScheme.BEARER,
       state: request5.state || "",
       nonce: request5.nonce || ""
     };
@@ -39474,24 +39773,24 @@ var ClientApplication = class {
    * AuthorizationCodeRequest are the same.
    */
   async acquireTokenByCode(request5, authCodePayLoad) {
-    this.logger.info("acquireTokenByCode called");
+    this.logger.info("acquireTokenByCode called", request5.correlationId || "");
     if (request5.state && authCodePayLoad) {
-      this.logger.info("acquireTokenByCode - validating state");
+      this.logger.info("acquireTokenByCode - validating state", request5.correlationId || "");
       this.validateState(request5.state, authCodePayLoad.state || "");
       authCodePayLoad = { ...authCodePayLoad, state: "" };
     }
     const validRequest = {
       ...request5,
       ...await this.initializeBaseRequest(request5),
-      authenticationScheme: AuthenticationScheme.BEARER
+      authenticationScheme: Constants_exports.AuthenticationScheme.BEARER
     };
     const serverTelemetryManager = this.initializeServerTelemetryManager(ApiId.acquireTokenByCode, validRequest.correlationId);
     try {
       const discoveredAuthority = await this.createAuthority(validRequest.authority, validRequest.correlationId, void 0, request5.azureCloudOptions);
       const authClientConfig = await this.buildOauthClientConfiguration(discoveredAuthority, validRequest.correlationId, validRequest.redirectUri, serverTelemetryManager);
-      const authorizationCodeClient = new AuthorizationCodeClient(authClientConfig);
+      const authorizationCodeClient = new AuthorizationCodeClient(authClientConfig, new StubPerformanceClient());
       this.logger.verbose("Auth code client created", validRequest.correlationId);
-      return await authorizationCodeClient.acquireToken(validRequest, authCodePayLoad);
+      return await authorizationCodeClient.acquireToken(validRequest, ApiId.acquireTokenByCode, authCodePayLoad);
     } catch (e) {
       if (e instanceof AuthError) {
         e.setCorrelationId(validRequest.correlationId);
@@ -39508,19 +39807,19 @@ var ClientApplication = class {
    * handle the caching and refreshing of tokens automatically.
    */
   async acquireTokenByRefreshToken(request5) {
-    this.logger.info("acquireTokenByRefreshToken called", request5.correlationId);
+    this.logger.info("acquireTokenByRefreshToken called", request5.correlationId || "");
     const validRequest = {
       ...request5,
       ...await this.initializeBaseRequest(request5),
-      authenticationScheme: AuthenticationScheme.BEARER
+      authenticationScheme: Constants_exports.AuthenticationScheme.BEARER
     };
     const serverTelemetryManager = this.initializeServerTelemetryManager(ApiId.acquireTokenByRefreshToken, validRequest.correlationId);
     try {
       const discoveredAuthority = await this.createAuthority(validRequest.authority, validRequest.correlationId, void 0, request5.azureCloudOptions);
       const refreshTokenClientConfig = await this.buildOauthClientConfiguration(discoveredAuthority, validRequest.correlationId, validRequest.redirectUri || "", serverTelemetryManager);
-      const refreshTokenClient = new RefreshTokenClient(refreshTokenClientConfig);
+      const refreshTokenClient = new RefreshTokenClient(refreshTokenClientConfig, new StubPerformanceClient());
       this.logger.verbose("Refresh token client created", validRequest.correlationId);
-      return await refreshTokenClient.acquireToken(validRequest);
+      return await refreshTokenClient.acquireToken(validRequest, ApiId.acquireTokenByRefreshToken);
     } catch (e) {
       if (e instanceof AuthError) {
         e.setCorrelationId(validRequest.correlationId);
@@ -39547,15 +39846,15 @@ var ClientApplication = class {
     try {
       const discoveredAuthority = await this.createAuthority(validRequest.authority, validRequest.correlationId, void 0, request5.azureCloudOptions);
       const clientConfiguration = await this.buildOauthClientConfiguration(discoveredAuthority, validRequest.correlationId, validRequest.redirectUri || "", serverTelemetryManager);
-      const silentFlowClient = new SilentFlowClient(clientConfiguration);
+      const silentFlowClient = new SilentFlowClient(clientConfiguration, new StubPerformanceClient());
       this.logger.verbose("Silent flow client created", validRequest.correlationId);
       try {
         await this.tokenCache.overwriteCache();
         return await this.acquireCachedTokenSilent(validRequest, silentFlowClient, clientConfiguration);
       } catch (error2) {
         if (error2 instanceof ClientAuthError && error2.errorCode === ClientAuthErrorCodes_exports.tokenRefreshRequired) {
-          const refreshTokenClient = new RefreshTokenClient(clientConfiguration);
-          return refreshTokenClient.acquireTokenByRefreshToken(validRequest);
+          const refreshTokenClient = new RefreshTokenClient(clientConfiguration, new StubPerformanceClient());
+          return refreshTokenClient.acquireTokenByRefreshToken(validRequest, ApiId.acquireTokenSilent);
         }
         throw error2;
       }
@@ -39570,13 +39869,13 @@ var ClientApplication = class {
   async acquireCachedTokenSilent(validRequest, silentFlowClient, clientConfiguration) {
     const [authResponse, cacheOutcome] = await silentFlowClient.acquireCachedToken({
       ...validRequest,
-      scopes: validRequest.scopes?.length ? validRequest.scopes : [...OIDC_DEFAULT_SCOPES]
+      scopes: validRequest.scopes?.length ? validRequest.scopes : [...Constants_exports.OIDC_DEFAULT_SCOPES]
     });
-    if (cacheOutcome === CacheOutcome.PROACTIVELY_REFRESHED) {
-      this.logger.info("ClientApplication:acquireCachedTokenSilent - Cached access token's refreshOn property has been exceeded'. It's not expired, but must be refreshed.");
-      const refreshTokenClient = new RefreshTokenClient(clientConfiguration);
+    if (cacheOutcome === Constants_exports.CacheOutcome.PROACTIVELY_REFRESHED) {
+      this.logger.info("ClientApplication:acquireCachedTokenSilent - Cached access token's refreshOn property has been exceeded'. It's not expired, but must be refreshed.", validRequest.correlationId);
+      const refreshTokenClient = new RefreshTokenClient(clientConfiguration, new StubPerformanceClient());
       try {
-        await refreshTokenClient.acquireTokenByRefreshToken(validRequest);
+        await refreshTokenClient.acquireTokenByRefreshToken(validRequest, ApiId.acquireTokenSilent);
       } catch {
       }
     }
@@ -39594,7 +39893,7 @@ var ClientApplication = class {
    * @deprecated - Use a more secure flow instead
    */
   async acquireTokenByUsernamePassword(request5) {
-    this.logger.info("acquireTokenByUsernamePassword called", request5.correlationId);
+    this.logger.info("acquireTokenByUsernamePassword called", request5.correlationId || "");
     const validRequest = {
       ...request5,
       ...await this.initializeBaseRequest(request5)
@@ -39618,7 +39917,7 @@ var ClientApplication = class {
    * Gets the token cache for the application.
    */
   getTokenCache() {
-    this.logger.info("getTokenCache called");
+    this.logger.info("getTokenCache called", "");
     return this.tokenCache;
   }
   /**
@@ -39665,16 +39964,14 @@ var ClientApplication = class {
         clientId: this.config.auth.clientId,
         authority: discoveredAuthority,
         clientCapabilities: this.config.auth.clientCapabilities,
-        redirectUri
+        redirectUri,
+        isMcp: this.config.auth.isMcp
       },
       loggerOptions: {
         logLevel: this.config.system.loggerOptions.logLevel,
         loggerCallback: this.config.system.loggerOptions.loggerCallback,
         piiLoggingEnabled: this.config.system.loggerOptions.piiLoggingEnabled,
         correlationId: requestCorrelationId
-      },
-      cacheOptions: {
-        claimsBasedCachingEnabled: this.config.cache.claimsBasedCachingEnabled
       },
       cryptoInterface: this.cryptoProvider,
       networkInterface: this.config.system.networkClient,
@@ -39685,10 +39982,10 @@ var ClientApplication = class {
         clientAssertion: await this.getClientAssertion(discoveredAuthority)
       },
       libraryInfo: {
-        sku: Constants2.MSAL_SKU,
+        sku: Constants.MSAL_SKU,
         version: version2,
-        cpu: process.arch || Constants.EMPTY_STRING,
-        os: process.platform || Constants.EMPTY_STRING
+        cpu: process.arch || "",
+        os: process.platform || ""
       },
       telemetry: this.config.telemetry,
       persistencePlugin: this.config.cache.cachePlugin,
@@ -39702,7 +39999,7 @@ var ClientApplication = class {
     }
     return this.clientAssertion && {
       assertion: this.clientAssertion.getJwt(this.cryptoProvider, this.config.auth.clientId, authority.tokenEndpoint),
-      assertionType: Constants2.JWT_BEARER_ASSERTION_TYPE
+      assertionType: Constants.JWT_BEARER_ASSERTION_TYPE
     };
   }
   /**
@@ -39710,22 +40007,19 @@ var ClientApplication = class {
    * @param authRequest - BaseAuthRequest for initialization
    */
   async initializeBaseRequest(authRequest) {
-    this.logger.verbose("initializeRequestScopes called", authRequest.correlationId);
-    if (authRequest.authenticationScheme && authRequest.authenticationScheme === AuthenticationScheme.POP) {
-      this.logger.verbose("Authentication Scheme 'pop' is not supported yet, setting Authentication Scheme to 'Bearer' for request", authRequest.correlationId);
+    const correlationId = authRequest.correlationId || this.cryptoProvider.createNewGuid();
+    this.logger.verbose("initializeRequestScopes called", correlationId);
+    if (authRequest.authenticationScheme && authRequest.authenticationScheme === Constants_exports.AuthenticationScheme.POP) {
+      this.logger.verbose("Authentication Scheme 'pop' is not supported yet, setting Authentication Scheme to 'Bearer' for request", correlationId);
     }
-    authRequest.authenticationScheme = AuthenticationScheme.BEARER;
-    if (this.config.cache.claimsBasedCachingEnabled && authRequest.claims && // Checks for empty stringified object "{}" which doesn't qualify as requested claims
-    !StringUtils.isEmptyObj(authRequest.claims)) {
-      authRequest.requestedClaimsHash = await this.cryptoProvider.hashString(authRequest.claims);
-    }
+    authRequest.authenticationScheme = Constants_exports.AuthenticationScheme.BEARER;
     return {
       ...authRequest,
       scopes: [
         ...authRequest && authRequest.scopes || [],
-        ...OIDC_DEFAULT_SCOPES
+        ...Constants_exports.OIDC_DEFAULT_SCOPES
       ],
-      correlationId: authRequest && authRequest.correlationId || this.cryptoProvider.createNewGuid(),
+      correlationId,
       authority: authRequest.authority || this.config.auth.authority
     };
   }
@@ -39753,14 +40047,13 @@ var ClientApplication = class {
     this.logger.verbose("createAuthority called", requestCorrelationId);
     const authorityUrl = Authority.generateAuthority(authorityString, azureCloudOptions || this.config.auth.azureCloudOptions);
     const authorityOptions = {
-      protocolMode: this.config.auth.protocolMode,
+      protocolMode: this.config.system.protocolMode,
       knownAuthorities: this.config.auth.knownAuthorities,
       cloudDiscoveryMetadata: this.config.auth.cloudDiscoveryMetadata,
       authorityMetadata: this.config.auth.authorityMetadata,
-      azureRegionConfiguration,
-      skipAuthorityMetadataCache: this.config.auth.skipAuthorityMetadataCache
+      azureRegionConfiguration
     };
-    return AuthorityFactory_exports.createDiscoveredInstance(authorityUrl, this.config.system.networkClient, this.storage, authorityOptions, this.logger, requestCorrelationId);
+    return AuthorityFactory_exports.createDiscoveredInstance(authorityUrl, this.config.system.networkClient, this.storage, authorityOptions, this.logger, requestCorrelationId, new StubPerformanceClient());
   }
   /**
    * Clear the cache
@@ -39771,7 +40064,7 @@ var ClientApplication = class {
 };
 
 // node_modules/@azure/msal-node/dist/network/LoopbackClient.mjs
-var import_http2 = __toESM(require("http"), 1);
+var import_http = __toESM(require("http"), 1);
 var LoopbackClient = class {
   /**
    * Spins up a loopback server which returns the server response when the localhost redirectUri is hit
@@ -39784,13 +40077,13 @@ var LoopbackClient = class {
       throw NodeAuthError.createLoopbackServerAlreadyExistsError();
     }
     return new Promise((resolve, reject) => {
-      this.server = import_http2.default.createServer((req, res) => {
+      this.server = import_http.default.createServer((req, res) => {
         const url = req.url;
         if (!url) {
           res.end(errorTemplate || "Error occurred loading redirectUrl");
           reject(NodeAuthError.createUnableToLoadRedirectUrlError());
           return;
-        } else if (url === Constants.FORWARD_SLASH) {
+        } else if (url === Constants_exports.FORWARD_SLASH) {
           res.end(successTemplate || "Auth code was successfully acquired. You can close this window now.");
           return;
         }
@@ -39798,7 +40091,7 @@ var LoopbackClient = class {
         const parsedUrl = new URL(url, redirectUri);
         const authCodeResponse = UrlUtils_exports.getDeserializedResponse(parsedUrl.search) || {};
         if (authCodeResponse.code) {
-          res.writeHead(HttpStatus.REDIRECT, {
+          res.writeHead(Constants_exports.HTTP_REDIRECT, {
             location: redirectUri
           });
           res.end();
@@ -39825,7 +40118,7 @@ var LoopbackClient = class {
       throw NodeAuthError.createInvalidLoopbackAddressTypeError();
     }
     const port = address && address.port;
-    return `${Constants2.HTTP_PROTOCOL}${Constants2.LOCALHOST}:${port}`;
+    return `${Constants.HTTP_PROTOCOL}${Constants.LOCALHOST}:${port}`;
   }
   /**
    * Close the loopback server
@@ -39857,9 +40150,9 @@ var DeviceCodeClient = class extends BaseClient {
     request5.deviceCodeCallback(deviceCodeResponse);
     const reqTimestamp = TimeUtils_exports.nowSeconds();
     const response = await this.acquireTokenWithDeviceCode(request5, deviceCodeResponse);
-    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.config.serializableCache, this.config.persistencePlugin);
-    responseHandler.validateTokenResponse(response);
-    return responseHandler.handleServerTokenResponse(response, this.authority, reqTimestamp, request5);
+    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.performanceClient, this.config.serializableCache, this.config.persistencePlugin);
+    responseHandler.validateTokenResponse(response, request5.correlationId);
+    return responseHandler.handleServerTokenResponse(response, this.authority, reqTimestamp, request5, ApiId.acquireTokenByDeviceCode);
   }
   /**
    * Creates device code request and executes http GET
@@ -39890,7 +40183,7 @@ var DeviceCodeClient = class extends BaseClient {
   createExtraQueryParameters(request5) {
     const parameters = /* @__PURE__ */ new Map();
     if (request5.extraQueryParameters) {
-      RequestParameterBuilder_exports.addExtraQueryParameters(parameters, request5.extraQueryParameters);
+      RequestParameterBuilder_exports.addExtraParameters(parameters, request5.extraQueryParameters);
     }
     return UrlUtils_exports.mapToQueryString(parameters);
   }
@@ -39925,7 +40218,7 @@ var DeviceCodeClient = class extends BaseClient {
     RequestParameterBuilder_exports.addScopes(parameters, request5.scopes);
     RequestParameterBuilder_exports.addClientId(parameters, this.config.authOptions.clientId);
     if (request5.extraQueryParameters) {
-      RequestParameterBuilder_exports.addExtraQueryParameters(parameters, request5.extraQueryParameters);
+      RequestParameterBuilder_exports.addExtraParameters(parameters, request5.extraQueryParameters);
     }
     if (request5.claims || this.config.authOptions.clientCapabilities && this.config.authOptions.clientCapabilities.length > 0) {
       RequestParameterBuilder_exports.addClaims(parameters, request5.claims, this.config.authOptions.clientCapabilities);
@@ -39940,17 +40233,17 @@ var DeviceCodeClient = class extends BaseClient {
    */
   continuePolling(deviceCodeExpirationTime, userSpecifiedTimeout, userSpecifiedCancelFlag) {
     if (userSpecifiedCancelFlag) {
-      this.logger.error("Token request cancelled by setting DeviceCodeRequest.cancel = true");
-      throw createClientAuthError(ClientAuthErrorCodes_exports.deviceCodePollingCancelled);
+      this.logger.error("Token request cancelled by setting DeviceCodeRequest.cancel = true", "");
+      throw createClientAuthError(deviceCodePollingCancelled);
     } else if (userSpecifiedTimeout && userSpecifiedTimeout < deviceCodeExpirationTime && TimeUtils_exports.nowSeconds() > userSpecifiedTimeout) {
-      this.logger.error(`User defined timeout for device code polling reached. The timeout was set for ${userSpecifiedTimeout}`);
-      throw createClientAuthError(ClientAuthErrorCodes_exports.userTimeoutReached);
+      this.logger.error(`User defined timeout for device code polling reached. The timeout was set for ${userSpecifiedTimeout}`, "");
+      throw createClientAuthError(userTimeoutReached);
     } else if (TimeUtils_exports.nowSeconds() > deviceCodeExpirationTime) {
       if (userSpecifiedTimeout) {
-        this.logger.verbose(`User specified timeout ignored as the device code has expired before the timeout elapsed. The user specified timeout was set for ${userSpecifiedTimeout}`);
+        this.logger.verbose(`User specified timeout ignored as the device code has expired before the timeout elapsed. The user specified timeout was set for ${userSpecifiedTimeout}`, "");
       }
-      this.logger.error(`Device code expired. Expiration time of device code was ${deviceCodeExpirationTime}`);
-      throw createClientAuthError(ClientAuthErrorCodes_exports.deviceCodeExpired);
+      this.logger.error(`Device code expired. Expiration time of device code was ${deviceCodeExpirationTime}`, "");
+      throw createClientAuthError(deviceCodeExpired);
     }
     return true;
   }
@@ -39981,20 +40274,20 @@ var DeviceCodeClient = class extends BaseClient {
       };
       const response = await this.executePostToTokenEndpoint(endpoint, requestBody, headers, thumbprint, request5.correlationId);
       if (response.body && response.body.error) {
-        if (response.body.error === Constants.AUTHORIZATION_PENDING) {
-          this.logger.info("Authorization pending. Continue polling.");
+        if (response.body.error === Constants_exports.AUTHORIZATION_PENDING) {
+          this.logger.info("Authorization pending. Continue polling.", request5.correlationId);
           await TimeUtils_exports.delay(pollingIntervalMilli);
         } else {
-          this.logger.info("Unexpected error in polling from the server");
+          this.logger.info("Unexpected error in polling from the server", request5.correlationId);
           throw createAuthError(AuthErrorCodes_exports.postRequestFailed, response.body.error);
         }
       } else {
-        this.logger.verbose("Authorization completed successfully. Polling stopped.");
+        this.logger.verbose("Authorization completed successfully. Polling stopped.", request5.correlationId);
         return response.body;
       }
     }
-    this.logger.error("Polling stopped for unknown reasons.");
-    throw createClientAuthError(ClientAuthErrorCodes_exports.deviceCodeUnknownError);
+    this.logger.error("Polling stopped for unknown reasons.", request5.correlationId);
+    throw createClientAuthError(deviceCodeUnknownError);
   }
   /**
    * Creates query parameters and converts to string.
@@ -40005,7 +40298,7 @@ var DeviceCodeClient = class extends BaseClient {
     const parameters = /* @__PURE__ */ new Map();
     RequestParameterBuilder_exports.addScopes(parameters, request5.scopes);
     RequestParameterBuilder_exports.addClientId(parameters, this.config.authOptions.clientId);
-    RequestParameterBuilder_exports.addGrantType(parameters, GrantType.DEVICE_CODE_GRANT);
+    RequestParameterBuilder_exports.addGrantType(parameters, Constants_exports.GrantType.DEVICE_CODE_GRANT);
     RequestParameterBuilder_exports.addDeviceCode(parameters, deviceCodeResponse.deviceCode);
     const correlationId = request5.correlationId || this.config.cryptoInterface.createNewGuid();
     RequestParameterBuilder_exports.addCorrelationId(parameters, correlationId);
@@ -40049,11 +40342,11 @@ var PublicClientApplication = class extends ClientApplication {
         this.nativeBrokerPlugin = this.config.broker.nativeBrokerPlugin;
         this.nativeBrokerPlugin.setLogger(this.config.system.loggerOptions);
       } else {
-        this.logger.warning("NativeBroker implementation was provided but the broker is unavailable.");
+        this.logger.warning("NativeBroker implementation was provided but the broker is unavailable.", "");
       }
     }
     this.skus = ServerTelemetryManager.makeExtraSkuString({
-      libraryName: Constants2.MSAL_SKU,
+      libraryName: Constants.MSAL_SKU,
       libraryVersion: version2
     });
   }
@@ -40067,7 +40360,8 @@ var PublicClientApplication = class extends ClientApplication {
    * until the end-user completes input of credentials.
    */
   async acquireTokenByDeviceCode(request5) {
-    this.logger.info("acquireTokenByDeviceCode called", request5.correlationId);
+    this.logger.info("acquireTokenByDeviceCode called", request5.correlationId || "");
+    enforceResourceParameter(this.config.auth.isMcp, request5);
     const validRequest = Object.assign(request5, await this.initializeBaseRequest(request5));
     const serverTelemetryManager = this.initializeServerTelemetryManager(ApiId.acquireTokenByDeviceCode, validRequest.correlationId);
     try {
@@ -40090,23 +40384,30 @@ var PublicClientApplication = class extends ClientApplication {
   async acquireTokenInteractive(request5) {
     const correlationId = request5.correlationId || this.cryptoProvider.createNewGuid();
     this.logger.trace("acquireTokenInteractive called", correlationId);
+    enforceResourceParameter(this.config.auth.isMcp, request5);
     const { openBrowser, successTemplate, errorTemplate, windowHandle, loopbackClient: customLoopbackClient, ...remainingProperties } = request5;
     if (this.nativeBrokerPlugin) {
       const brokerRequest = {
         ...remainingProperties,
         clientId: this.config.auth.clientId,
-        scopes: request5.scopes || OIDC_DEFAULT_SCOPES,
-        redirectUri: `${Constants2.HTTP_PROTOCOL}${Constants2.LOCALHOST}`,
+        scopes: request5.scopes || Constants_exports.OIDC_DEFAULT_SCOPES,
+        redirectUri: request5.redirectUri || "",
         authority: request5.authority || this.config.auth.authority,
         correlationId,
         extraParameters: {
           ...remainingProperties.extraQueryParameters,
-          ...remainingProperties.tokenQueryParameters,
+          ...remainingProperties.extraParameters,
           [AADServerParamKeys_exports.X_CLIENT_EXTRA_SKU]: this.skus
         },
         accountId: remainingProperties.account?.nativeAccountId
       };
       return this.nativeBrokerPlugin.acquireTokenInteractive(brokerRequest, windowHandle);
+    }
+    if (request5.redirectUri) {
+      if (!this.config.broker.nativeBrokerPlugin) {
+        throw NodeAuthError.createRedirectUriNotSupportedError();
+      }
+      request5.redirectUri = "";
     }
     const { verifier, challenge } = await this.cryptoProvider.generatePkceCodes();
     const loopbackClient = customLoopbackClient || new LoopbackClient();
@@ -40122,11 +40423,11 @@ var PublicClientApplication = class extends ClientApplication {
       const validRequest = {
         ...remainingProperties,
         correlationId,
-        scopes: request5.scopes || OIDC_DEFAULT_SCOPES,
+        scopes: request5.scopes || Constants_exports.OIDC_DEFAULT_SCOPES,
         redirectUri,
-        responseMode: ResponseMode.QUERY,
+        responseMode: Constants_exports.ResponseMode.QUERY,
         codeChallenge: challenge,
-        codeChallengeMethod: CodeChallengeMethodValues.S256
+        codeChallengeMethod: Constants_exports.CodeChallengeMethodValues.S256
       };
       const authCodeUrl = await this.getAuthCodeUrl(validRequest);
       await openBrowser(authCodeUrl);
@@ -40143,7 +40444,7 @@ var PublicClientApplication = class extends ClientApplication {
       const tokenRequest = {
         code: authCodeResponse.code,
         codeVerifier: verifier,
-        clientInfo: clientInfo || Constants.EMPTY_STRING,
+        clientInfo: clientInfo || "",
         ...validRequest
       };
       return await this.acquireTokenByCode(tokenRequest);
@@ -40159,16 +40460,18 @@ var PublicClientApplication = class extends ClientApplication {
   async acquireTokenSilent(request5) {
     const correlationId = request5.correlationId || this.cryptoProvider.createNewGuid();
     this.logger.trace("acquireTokenSilent called", correlationId);
+    enforceResourceParameter(this.config.auth.isMcp, request5);
     if (this.nativeBrokerPlugin) {
       const brokerRequest = {
         ...request5,
         clientId: this.config.auth.clientId,
-        scopes: request5.scopes || OIDC_DEFAULT_SCOPES,
-        redirectUri: `${Constants2.HTTP_PROTOCOL}${Constants2.LOCALHOST}`,
+        scopes: request5.scopes || Constants_exports.OIDC_DEFAULT_SCOPES,
+        redirectUri: request5.redirectUri || "",
         authority: request5.authority || this.config.auth.authority,
         correlationId,
         extraParameters: {
-          ...request5.tokenQueryParameters,
+          ...request5.extraQueryParameters,
+          ...request5.extraParameters,
           [AADServerParamKeys_exports.X_CLIENT_EXTRA_SKU]: this.skus
         },
         accountId: request5.account.nativeAccountId,
@@ -40176,7 +40479,29 @@ var PublicClientApplication = class extends ClientApplication {
       };
       return this.nativeBrokerPlugin.acquireTokenSilent(brokerRequest);
     }
+    if (request5.redirectUri) {
+      if (!this.config.broker.nativeBrokerPlugin) {
+        throw NodeAuthError.createRedirectUriNotSupportedError();
+      }
+      request5.redirectUri = "";
+    }
     return super.acquireTokenSilent(request5);
+  }
+  /**
+   * Acquires a token by exchanging the authorization code received from the first step of OAuth 2.0 Authorization Code Flow.
+   * In MCP mode, a resource parameter is required on the request.
+   */
+  async acquireTokenByCode(request5, authCodePayLoad) {
+    enforceResourceParameter(this.config.auth.isMcp, request5);
+    return super.acquireTokenByCode(request5, authCodePayLoad);
+  }
+  /**
+   * Acquires a token by exchanging the refresh token provided for a new set of tokens.
+   * In MCP mode, a resource parameter is required on the request.
+   */
+  async acquireTokenByRefreshToken(request5) {
+    enforceResourceParameter(this.config.auth.isMcp, request5);
+    return super.acquireTokenByRefreshToken(request5);
   }
   /**
    * Removes cache artifacts associated with the given account
@@ -40192,7 +40517,7 @@ var PublicClientApplication = class extends ClientApplication {
       };
       await this.nativeBrokerPlugin.signOut(signoutRequest);
     }
-    await this.getTokenCache().removeAccount(request5.account);
+    await this.getTokenCache().removeAccount(request5.account, request5.correlationId);
   }
   /**
    * Returns all cached accounts for this application. If brokering is enabled this request will be serviced by the broker.
@@ -40254,8 +40579,8 @@ var ClientCredentialClient = class extends BaseClient {
     }
     const [cachedAuthenticationResult, lastCacheOutcome] = await this.getCachedAuthenticationResult(request5, this.config, this.cryptoUtils, this.authority, this.cacheManager, this.serverTelemetryManager);
     if (cachedAuthenticationResult) {
-      if (lastCacheOutcome === CacheOutcome.PROACTIVELY_REFRESHED) {
-        this.logger.info("ClientCredentialClient:getCachedAuthenticationResult - Cached access token's refreshOn property has been exceeded'. It's not expired, but must be refreshed.");
+      if (lastCacheOutcome === Constants_exports.CacheOutcome.PROACTIVELY_REFRESHED) {
+        this.logger.info("ClientCredentialClient:getCachedAuthenticationResult - Cached access token's refreshOn property has been exceeded'. It's not expired, but must be refreshed.", request5.correlationId);
         const refreshAccessToken = true;
         await this.executeTokenRequest(request5, this.authority, refreshAccessToken);
       }
@@ -40270,27 +40595,27 @@ var ClientCredentialClient = class extends BaseClient {
   async getCachedAuthenticationResult(request5, config, cryptoUtils, authority, cacheManager, serverTelemetryManager) {
     const clientConfiguration = config;
     const managedIdentityConfiguration = config;
-    let lastCacheOutcome = CacheOutcome.NOT_APPLICABLE;
+    let lastCacheOutcome = Constants_exports.CacheOutcome.NOT_APPLICABLE;
     let cacheContext;
     if (clientConfiguration.serializableCache && clientConfiguration.persistencePlugin) {
       cacheContext = new TokenCacheContext(clientConfiguration.serializableCache, false);
       await clientConfiguration.persistencePlugin.beforeCacheAccess(cacheContext);
     }
-    const cachedAccessToken = this.readAccessTokenFromCache(authority, managedIdentityConfiguration.managedIdentityId?.id || clientConfiguration.authOptions.clientId, new ScopeSet(request5.scopes || []), cacheManager);
+    const cachedAccessToken = this.readAccessTokenFromCache(authority, managedIdentityConfiguration.managedIdentityId?.id || clientConfiguration.authOptions.clientId, new ScopeSet(request5.scopes || []), cacheManager, request5.correlationId);
     if (clientConfiguration.serializableCache && clientConfiguration.persistencePlugin && cacheContext) {
       await clientConfiguration.persistencePlugin.afterCacheAccess(cacheContext);
     }
     if (!cachedAccessToken) {
-      serverTelemetryManager?.setCacheOutcome(CacheOutcome.NO_CACHED_ACCESS_TOKEN);
-      return [null, CacheOutcome.NO_CACHED_ACCESS_TOKEN];
+      serverTelemetryManager?.setCacheOutcome(Constants_exports.CacheOutcome.NO_CACHED_ACCESS_TOKEN);
+      return [null, Constants_exports.CacheOutcome.NO_CACHED_ACCESS_TOKEN];
     }
-    if (TimeUtils_exports.isTokenExpired(cachedAccessToken.expiresOn, clientConfiguration.systemOptions?.tokenRenewalOffsetSeconds || DEFAULT_TOKEN_RENEWAL_OFFSET_SEC)) {
-      serverTelemetryManager?.setCacheOutcome(CacheOutcome.CACHED_ACCESS_TOKEN_EXPIRED);
-      return [null, CacheOutcome.CACHED_ACCESS_TOKEN_EXPIRED];
+    if (TimeUtils_exports.isTokenExpired(cachedAccessToken.expiresOn, clientConfiguration.systemOptions?.tokenRenewalOffsetSeconds || Constants_exports.DEFAULT_TOKEN_RENEWAL_OFFSET_SEC)) {
+      serverTelemetryManager?.setCacheOutcome(Constants_exports.CacheOutcome.CACHED_ACCESS_TOKEN_EXPIRED);
+      return [null, Constants_exports.CacheOutcome.CACHED_ACCESS_TOKEN_EXPIRED];
     }
     if (cachedAccessToken.refreshOn && TimeUtils_exports.isTokenExpired(cachedAccessToken.refreshOn.toString(), 0)) {
-      lastCacheOutcome = CacheOutcome.PROACTIVELY_REFRESHED;
-      serverTelemetryManager?.setCacheOutcome(CacheOutcome.PROACTIVELY_REFRESHED);
+      lastCacheOutcome = Constants_exports.CacheOutcome.PROACTIVELY_REFRESHED;
+      serverTelemetryManager?.setCacheOutcome(Constants_exports.CacheOutcome.PROACTIVELY_REFRESHED);
     }
     return [
       await ResponseHandler.generateAuthenticationResult(cryptoUtils, authority, {
@@ -40299,23 +40624,23 @@ var ClientCredentialClient = class extends BaseClient {
         accessToken: cachedAccessToken,
         refreshToken: null,
         appMetadata: null
-      }, true, request5),
+      }, true, request5, this.performanceClient),
       lastCacheOutcome
     ];
   }
   /**
    * Reads access token from the cache
    */
-  readAccessTokenFromCache(authority, id, scopeSet, cacheManager) {
+  readAccessTokenFromCache(authority, id, scopeSet, cacheManager, correlationId) {
     const accessTokenFilter = {
-      homeAccountId: Constants.EMPTY_STRING,
+      homeAccountId: "",
       environment: authority.canonicalAuthorityUrlComponents.HostNameAndPort,
-      credentialType: CredentialType.ACCESS_TOKEN,
+      credentialType: Constants_exports.CredentialType.ACCESS_TOKEN,
       clientId: id,
       realm: authority.tenant,
       target: ScopeSet.createSearchScopes(scopeSet.asArray())
     };
-    const accessTokens = cacheManager.getAccessTokensByFilter(accessTokenFilter);
+    const accessTokens = cacheManager.getAccessTokensByFilter(accessTokenFilter, correlationId);
     if (accessTokens.length < 1) {
       return null;
     } else if (accessTokens.length > 1) {
@@ -40332,7 +40657,7 @@ var ClientCredentialClient = class extends BaseClient {
     let serverTokenResponse;
     let reqTimestamp;
     if (this.appTokenProvider) {
-      this.logger.info("Using appTokenProvider extensibility.");
+      this.logger.info("Using appTokenProvider extensibility.", request5.correlationId);
       const appTokenPropviderParameters = {
         correlationId: request5.correlationId,
         tenantId: this.config.authOptions.authority.tenant,
@@ -40345,7 +40670,7 @@ var ClientCredentialClient = class extends BaseClient {
         access_token: appTokenProviderResult.accessToken,
         expires_in: appTokenProviderResult.expiresInSeconds,
         refresh_in: appTokenProviderResult.refreshInSeconds,
-        token_type: AuthenticationScheme.BEARER
+        token_type: Constants_exports.AuthenticationScheme.BEARER
       };
     } else {
       const queryParametersString = this.createTokenQueryParameters(request5);
@@ -40363,15 +40688,15 @@ var ClientCredentialClient = class extends BaseClient {
         shrClaims: request5.shrClaims,
         sshKid: request5.sshKid
       };
-      this.logger.info("Sending token request to endpoint: " + authority.tokenEndpoint);
+      this.logger.info("Sending token request to endpoint: " + authority.tokenEndpoint, request5.correlationId);
       reqTimestamp = TimeUtils_exports.nowSeconds();
       const response = await this.executePostToTokenEndpoint(endpoint, requestBody, headers, thumbprint, request5.correlationId);
       serverTokenResponse = response.body;
       serverTokenResponse.status = response.status;
     }
-    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.config.serializableCache, this.config.persistencePlugin);
-    responseHandler.validateTokenResponse(serverTokenResponse, refreshAccessToken);
-    const tokenResponse = await responseHandler.handleServerTokenResponse(serverTokenResponse, this.authority, reqTimestamp, request5);
+    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.performanceClient, this.config.serializableCache, this.config.persistencePlugin);
+    responseHandler.validateTokenResponse(serverTokenResponse, request5.correlationId, refreshAccessToken);
+    const tokenResponse = await responseHandler.handleServerTokenResponse(serverTokenResponse, this.authority, reqTimestamp, request5, ApiId.acquireTokenByClientCredential);
     return tokenResponse;
   }
   /**
@@ -40382,7 +40707,7 @@ var ClientCredentialClient = class extends BaseClient {
     const parameters = /* @__PURE__ */ new Map();
     RequestParameterBuilder_exports.addClientId(parameters, this.config.authOptions.clientId);
     RequestParameterBuilder_exports.addScopes(parameters, request5.scopes, false);
-    RequestParameterBuilder_exports.addGrantType(parameters, GrantType.CLIENT_CREDENTIALS_GRANT);
+    RequestParameterBuilder_exports.addGrantType(parameters, Constants_exports.GrantType.CLIENT_CREDENTIALS_GRANT);
     RequestParameterBuilder_exports.addLibraryInfo(parameters, this.config.libraryInfo);
     RequestParameterBuilder_exports.addApplicationTelemetry(parameters, this.config.telemetry.application);
     RequestParameterBuilder_exports.addThrottling(parameters);
@@ -40438,15 +40763,15 @@ var OnBehalfOfClient = class extends BaseClient {
   async getCachedAuthenticationResult(request5) {
     const cachedAccessToken = this.readAccessTokenFromCacheForOBO(this.config.authOptions.clientId, request5);
     if (!cachedAccessToken) {
-      this.serverTelemetryManager?.setCacheOutcome(CacheOutcome.NO_CACHED_ACCESS_TOKEN);
-      this.logger.info("SilentFlowClient:acquireCachedToken - No access token found in cache for the given properties.");
+      this.serverTelemetryManager?.setCacheOutcome(Constants_exports.CacheOutcome.NO_CACHED_ACCESS_TOKEN);
+      this.logger.info("SilentFlowClient:acquireCachedToken - No access token found in cache for the given properties.", request5.correlationId);
       throw createClientAuthError(ClientAuthErrorCodes_exports.tokenRefreshRequired);
     } else if (TimeUtils_exports.isTokenExpired(cachedAccessToken.expiresOn, this.config.systemOptions.tokenRenewalOffsetSeconds)) {
-      this.serverTelemetryManager?.setCacheOutcome(CacheOutcome.CACHED_ACCESS_TOKEN_EXPIRED);
-      this.logger.info(`OnbehalfofFlow:getCachedAuthenticationResult - Cached access token is expired or will expire within ${this.config.systemOptions.tokenRenewalOffsetSeconds} seconds.`);
+      this.serverTelemetryManager?.setCacheOutcome(Constants_exports.CacheOutcome.CACHED_ACCESS_TOKEN_EXPIRED);
+      this.logger.info(`OnbehalfofFlow:getCachedAuthenticationResult - Cached access token is expired or will expire within ${this.config.systemOptions.tokenRenewalOffsetSeconds} seconds.`, request5.correlationId);
       throw createClientAuthError(ClientAuthErrorCodes_exports.tokenRefreshRequired);
     }
-    const cachedIdToken = this.readIdTokenFromCacheForOBO(cachedAccessToken.homeAccountId);
+    const cachedIdToken = this.readIdTokenFromCacheForOBO(cachedAccessToken.homeAccountId, request5.correlationId);
     let idTokenClaims;
     let cachedAccount = null;
     if (cachedIdToken) {
@@ -40456,10 +40781,10 @@ var OnBehalfOfClient = class extends BaseClient {
         homeAccountId: cachedIdToken.homeAccountId,
         environment: cachedIdToken.environment,
         tenantId: cachedIdToken.realm,
-        username: Constants.EMPTY_STRING,
-        localAccountId: localAccountId || Constants.EMPTY_STRING
+        username: "",
+        localAccountId: localAccountId || ""
       };
-      cachedAccount = this.cacheManager.readAccountFromCache(accountInfo);
+      cachedAccount = this.cacheManager.getAccount(this.cacheManager.generateAccountKey(accountInfo), request5.correlationId);
     }
     if (this.config.serverTelemetryManager) {
       this.config.serverTelemetryManager.incrementCacheHits();
@@ -40470,22 +40795,22 @@ var OnBehalfOfClient = class extends BaseClient {
       idToken: cachedIdToken,
       refreshToken: null,
       appMetadata: null
-    }, true, request5, idTokenClaims);
+    }, true, request5, this.performanceClient, idTokenClaims);
   }
   /**
    * read idtoken from cache, this is a specific implementation for OBO as the requirements differ from a generic lookup in the cacheManager
    * Certain use cases of OBO flow do not expect an idToken in the cache/or from the service
    * @param atHomeAccountId - account id
    */
-  readIdTokenFromCacheForOBO(atHomeAccountId) {
+  readIdTokenFromCacheForOBO(atHomeAccountId, correlationId) {
     const idTokenFilter = {
       homeAccountId: atHomeAccountId,
       environment: this.authority.canonicalAuthorityUrlComponents.HostNameAndPort,
-      credentialType: CredentialType.ID_TOKEN,
+      credentialType: Constants_exports.CredentialType.ID_TOKEN,
       clientId: this.config.authOptions.clientId,
       realm: this.authority.tenant
     };
-    const idTokenMap = this.cacheManager.getIdTokensByFilter(idTokenFilter);
+    const idTokenMap = this.cacheManager.getIdTokensByFilter(idTokenFilter, correlationId);
     if (Object.values(idTokenMap).length < 1) {
       return null;
     }
@@ -40497,18 +40822,17 @@ var OnBehalfOfClient = class extends BaseClient {
    * @param request - developer provided CommonOnBehalfOfRequest
    */
   readAccessTokenFromCacheForOBO(clientId, request5) {
-    const authScheme = request5.authenticationScheme || AuthenticationScheme.BEARER;
-    const credentialType = authScheme && authScheme.toLowerCase() !== AuthenticationScheme.BEARER.toLowerCase() ? CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME : CredentialType.ACCESS_TOKEN;
+    const authScheme = request5.authenticationScheme || Constants_exports.AuthenticationScheme.BEARER;
+    const credentialType = authScheme && authScheme.toLowerCase() !== Constants_exports.AuthenticationScheme.BEARER.toLowerCase() ? Constants_exports.CredentialType.ACCESS_TOKEN_WITH_AUTH_SCHEME : Constants_exports.CredentialType.ACCESS_TOKEN;
     const accessTokenFilter = {
       credentialType,
       clientId,
       target: ScopeSet.createSearchScopes(this.scopeSet.asArray()),
       tokenType: authScheme,
       keyId: request5.sshKid,
-      requestedClaimsHash: request5.requestedClaimsHash,
       userAssertionHash: this.userAssertionHash
     };
-    const accessTokens = this.cacheManager.getAccessTokensByFilter(accessTokenFilter);
+    const accessTokens = this.cacheManager.getAccessTokensByFilter(accessTokenFilter, request5.correlationId);
     const numAccessTokens = accessTokens.length;
     if (numAccessTokens < 1) {
       return null;
@@ -40540,9 +40864,9 @@ var OnBehalfOfClient = class extends BaseClient {
     };
     const reqTimestamp = TimeUtils_exports.nowSeconds();
     const response = await this.executePostToTokenEndpoint(endpoint, requestBody, headers, thumbprint, request5.correlationId);
-    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.config.serializableCache, this.config.persistencePlugin);
-    responseHandler.validateTokenResponse(response.body);
-    const tokenResponse = await responseHandler.handleServerTokenResponse(response.body, this.authority, reqTimestamp, request5, void 0, userAssertionHash);
+    const responseHandler = new ResponseHandler(this.config.authOptions.clientId, this.cacheManager, this.cryptoUtils, this.logger, this.performanceClient, this.config.serializableCache, this.config.persistencePlugin);
+    responseHandler.validateTokenResponse(response.body, request5.correlationId);
+    const tokenResponse = await responseHandler.handleServerTokenResponse(response.body, this.authority, reqTimestamp, request5, ApiId.acquireTokenByOBO, void 0, userAssertionHash);
     return tokenResponse;
   }
   /**
@@ -40553,7 +40877,7 @@ var OnBehalfOfClient = class extends BaseClient {
     const parameters = /* @__PURE__ */ new Map();
     RequestParameterBuilder_exports.addClientId(parameters, this.config.authOptions.clientId);
     RequestParameterBuilder_exports.addScopes(parameters, request5.scopes);
-    RequestParameterBuilder_exports.addGrantType(parameters, GrantType.JWT_BEARER);
+    RequestParameterBuilder_exports.addGrantType(parameters, Constants_exports.GrantType.JWT_BEARER);
     RequestParameterBuilder_exports.addClientInfo(parameters);
     RequestParameterBuilder_exports.addLibraryInfo(parameters, this.config.libraryInfo);
     RequestParameterBuilder_exports.addApplicationTelemetry(parameters, this.config.telemetry.application);
@@ -40610,7 +40934,7 @@ var ConfidentialClientApplication = class extends ClientApplication {
       return;
     }
     if (clientSecretNotEmpty && clientAssertionNotEmpty || clientAssertionNotEmpty && certificateNotEmpty || clientSecretNotEmpty && certificateNotEmpty) {
-      throw createClientAuthError(ClientAuthErrorCodes_exports.invalidClientCredential);
+      throw createClientAuthError(invalidClientCredential);
     }
     if (this.config.auth.clientSecret) {
       this.clientSecret = this.config.auth.clientSecret;
@@ -40621,7 +40945,7 @@ var ConfidentialClientApplication = class extends ClientApplication {
       return;
     }
     if (!certificateNotEmpty) {
-      throw createClientAuthError(ClientAuthErrorCodes_exports.invalidClientCredential);
+      throw createClientAuthError(invalidClientCredential);
     } else {
       this.clientAssertion = !!this.config.auth.clientCertificate.thumbprintSha256 ? ClientAssertion.fromCertificateWithSha256Thumbprint(this.config.auth.clientCertificate.thumbprintSha256, this.config.auth.clientCertificate.privateKey, this.config.auth.clientCertificate.x5c) : ClientAssertion.fromCertificate(
         // guaranteed to be a string, due to prior error checking in this function
@@ -40645,7 +40969,7 @@ var ConfidentialClientApplication = class extends ClientApplication {
    * Acquires tokens from the authority for the application (not for an end user).
    */
   async acquireTokenByClientCredential(request5) {
-    this.logger.info("acquireTokenByClientCredential called", request5.correlationId);
+    this.logger.info("acquireTokenByClientCredential called", request5.correlationId || "");
     let clientAssertion;
     if (request5.clientAssertion) {
       clientAssertion = {
@@ -40654,13 +40978,13 @@ var ConfidentialClientApplication = class extends ClientApplication {
           this.config.auth.clientId
           // tokenEndpoint will be undefined. resourceRequestUri is omitted in ClientCredentialRequest
         ),
-        assertionType: Constants2.JWT_BEARER_ASSERTION_TYPE
+        assertionType: Constants.JWT_BEARER_ASSERTION_TYPE
       };
     }
     const baseRequest = await this.initializeBaseRequest(request5);
     const validBaseRequest = {
       ...baseRequest,
-      scopes: baseRequest.scopes.filter((scope) => !OIDC_DEFAULT_SCOPES.includes(scope))
+      scopes: baseRequest.scopes.filter((scope) => !Constants_exports.OIDC_DEFAULT_SCOPES.includes(scope))
     };
     const validRequest = {
       ...request5,
@@ -40669,8 +40993,8 @@ var ConfidentialClientApplication = class extends ClientApplication {
     };
     const authority = new UrlString(validRequest.authority);
     const tenantId = authority.getUrlComponents().PathSegments[0];
-    if (Object.values(AADAuthorityConstants).includes(tenantId)) {
-      throw createClientAuthError(ClientAuthErrorCodes_exports.missingTenantIdError);
+    if (Object.values(Constants_exports.AADAuthority).includes(tenantId)) {
+      throw createClientAuthError(missingTenantIdError);
     }
     const ENV_MSAL_FORCE_REGION = process.env[MSAL_FORCE_REGION];
     let region;
@@ -40712,7 +41036,7 @@ var ConfidentialClientApplication = class extends ClientApplication {
    * https://docs.microsoft.com/en-us/azure/active-directory/develop/v2-oauth2-on-behalf-of-flow#gaining-consent-for-the-middle-tier-application
    */
   async acquireTokenOnBehalfOf(request5) {
-    this.logger.info("acquireTokenOnBehalfOf called", request5.correlationId);
+    this.logger.info("acquireTokenOnBehalfOf called", request5.correlationId || "");
     const validRequest = {
       ...request5,
       ...await this.initializeBaseRequest(request5)
@@ -40749,7 +41073,7 @@ var HttpClientWithRetries = class {
     this.logger = logger31;
   }
   async sendNetworkRequestAsyncHelper(httpMethod, url, options) {
-    if (httpMethod === HttpMethod.GET) {
+    if (httpMethod === HttpMethod2.GET) {
       return this.httpClientNoRetries.sendGetRequestAsync(url, options);
     } else {
       return this.httpClientNoRetries.sendPostRequestAsync(url, options);
@@ -40761,17 +41085,17 @@ var HttpClientWithRetries = class {
       this.retryPolicy.isNewRequest = true;
     }
     let currentRetry = 0;
-    while (await this.retryPolicy.pauseForRetry(response.status, currentRetry, this.logger, response.headers[HeaderNames.RETRY_AFTER])) {
+    while (await this.retryPolicy.pauseForRetry(response.status, currentRetry, this.logger, response.headers[Constants_exports.HeaderNames.RETRY_AFTER])) {
       response = await this.sendNetworkRequestAsyncHelper(httpMethod, url, options);
       currentRetry++;
     }
     return response;
   }
   async sendGetRequestAsync(url, options) {
-    return this.sendNetworkRequestAsync(HttpMethod.GET, url, options);
+    return this.sendNetworkRequestAsync(HttpMethod2.GET, url, options);
   }
   async sendPostRequestAsync(url, options) {
-    return this.sendNetworkRequestAsync(HttpMethod.POST, url, options);
+    return this.sendNetworkRequestAsync(HttpMethod2.POST, url, options);
   }
 };
 
@@ -40784,6 +41108,15 @@ var ManagedIdentityUserAssignedIdQueryParameterNames = {
   MANAGED_IDENTITY_RESOURCE_ID_NON_IMDS: "mi_res_id"
 };
 var BaseManagedIdentitySource = class {
+  /**
+   * Creates an instance of BaseManagedIdentitySource.
+   *
+   * @param logger - Logger instance for diagnostic information
+   * @param nodeStorage - Storage interface for caching tokens
+   * @param networkClient - Network client for making HTTP requests
+   * @param cryptoProvider - Cryptographic provider for token operations
+   * @param disableInternalRetries - Whether to disable automatic retry logic
+   */
   constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
     this.logger = logger31;
     this.nodeStorage = nodeStorage;
@@ -40791,9 +41124,30 @@ var BaseManagedIdentitySource = class {
     this.cryptoProvider = cryptoProvider;
     this.disableInternalRetries = disableInternalRetries;
   }
+  /**
+   * Processes the network response and converts it to a standardized server token response.
+   * This async version allows for source-specific response processing logic while maintaining
+   * backward compatibility with the synchronous version.
+   *
+   * @param response - The network response containing the managed identity token
+   * @param _networkClient - Network client used for the request (unused in base implementation)
+   * @param _networkRequest - The original network request parameters (unused in base implementation)
+   * @param _networkRequestOptions - The network request options (unused in base implementation)
+   *
+   * @returns Promise resolving to a standardized server authorization token response
+   */
   async getServerTokenResponseAsync(response, _networkClient, _networkRequest, _networkRequestOptions) {
     return this.getServerTokenResponse(response);
   }
+  /**
+   * Converts a managed identity token response to a standardized server authorization token response.
+   * Handles time format conversion, expiration calculation, and error mapping to ensure
+   * compatibility with the MSAL response handling pipeline.
+   *
+   * @param response - The network response containing the managed identity token
+   *
+   * @returns Standardized server authorization token response with normalized fields
+   */
   getServerTokenResponse(response) {
     let refreshIn, expiresIn;
     if (response.body.expires_on) {
@@ -40823,10 +41177,34 @@ var BaseManagedIdentitySource = class {
     };
     return serverTokenResponse;
   }
+  /**
+   * Acquires an access token using the managed identity endpoint for the specified resource.
+   * This is the primary method for token acquisition, handling the complete flow from
+   * request creation through response processing and token caching.
+   *
+   * @param managedIdentityRequest - The managed identity request containing resource and optional parameters
+   * @param managedIdentityId - The managed identity configuration (system or user-assigned)
+   * @param fakeAuthority - Authority instance used for token caching (managed identity uses a placeholder authority)
+   * @param refreshAccessToken - Whether this is a token refresh operation
+   *
+   * @returns Promise resolving to an authentication result containing the access token and metadata
+   *
+   * @throws {AuthError} When network requests fail or token validation fails
+   * @throws {ClientAuthError} When network errors occur during the request
+   */
   async acquireTokenWithManagedIdentity(managedIdentityRequest, managedIdentityId, fakeAuthority, refreshAccessToken) {
     const networkRequest = this.createRequest(managedIdentityRequest.resource, managedIdentityId);
+    if (managedIdentityRequest.revokedTokenSha256Hash) {
+      this.logger.info(`[Managed Identity] The following claims are present in the request: ${managedIdentityRequest.claims}`, "");
+      networkRequest.queryParameters[ManagedIdentityQueryParameters.SHA256_TOKEN_TO_REFRESH] = managedIdentityRequest.revokedTokenSha256Hash;
+    }
+    if (managedIdentityRequest.clientCapabilities?.length) {
+      const clientCapabilities = managedIdentityRequest.clientCapabilities.toString();
+      this.logger.info(`[Managed Identity] The following client capabilities are present in the request: ${clientCapabilities}`, "");
+      networkRequest.queryParameters[ManagedIdentityQueryParameters.XMS_CC] = clientCapabilities;
+    }
     const headers = networkRequest.headers;
-    headers[HeaderNames.CONTENT_TYPE] = Constants.URL_FORM_CONTENT_TYPE;
+    headers[Constants_exports.HeaderNames.CONTENT_TYPE] = Constants_exports.URL_FORM_CONTENT_TYPE;
     const networkRequestOptions = { headers };
     if (Object.keys(networkRequest.bodyParameters).length) {
       networkRequestOptions.body = networkRequest.computeParametersBodyString();
@@ -40835,7 +41213,7 @@ var BaseManagedIdentitySource = class {
     const reqTimestamp = TimeUtils_exports.nowSeconds();
     let response;
     try {
-      if (networkRequest.httpMethod === HttpMethod.POST) {
+      if (networkRequest.httpMethod === HttpMethod2.POST) {
         response = await networkClientHelper.sendPostRequestAsync(networkRequest.computeUri(), networkRequestOptions);
       } else {
         response = await networkClientHelper.sendGetRequestAsync(networkRequest.computeUri(), networkRequestOptions);
@@ -40847,21 +41225,34 @@ var BaseManagedIdentitySource = class {
         throw createClientAuthError(ClientAuthErrorCodes_exports.networkError);
       }
     }
-    const responseHandler = new ResponseHandler(managedIdentityId.id, this.nodeStorage, this.cryptoProvider, this.logger, null, null);
+    const responseHandler = new ResponseHandler(managedIdentityId.id, this.nodeStorage, this.cryptoProvider, this.logger, new StubPerformanceClient(), null, null);
     const serverTokenResponse = await this.getServerTokenResponseAsync(response, networkClientHelper, networkRequest, networkRequestOptions);
-    responseHandler.validateTokenResponse(serverTokenResponse, refreshAccessToken);
-    return responseHandler.handleServerTokenResponse(serverTokenResponse, fakeAuthority, reqTimestamp, managedIdentityRequest);
+    responseHandler.validateTokenResponse(serverTokenResponse, serverTokenResponse.correlation_id || "", refreshAccessToken);
+    return responseHandler.handleServerTokenResponse(serverTokenResponse, fakeAuthority, reqTimestamp, managedIdentityRequest, ApiId.acquireTokenWithManagedIdentity);
   }
+  /**
+   * Determines the appropriate query parameter name for user-assigned managed identity
+   * based on the identity type, API version, and endpoint characteristics.
+   * Different Azure services and API versions use different parameter names for the same identity types.
+   *
+   * @param managedIdentityIdType - The type of user-assigned managed identity (client ID, object ID, or resource ID)
+   * @param isImds - Whether the request is being made to the IMDS (Instance Metadata Service) endpoint
+   * @param usesApi2017 - Whether the endpoint uses the 2017-09-01 API version (affects client ID parameter name)
+   *
+   * @returns The correct query parameter name for the specified identity type and endpoint
+   *
+   * @throws {ManagedIdentityError} When an invalid managed identity ID type is provided
+   */
   getManagedIdentityUserAssignedIdQueryParameterKey(managedIdentityIdType, isImds, usesApi2017) {
     switch (managedIdentityIdType) {
       case ManagedIdentityIdType.USER_ASSIGNED_CLIENT_ID:
-        this.logger.info(`[Managed Identity] [API version ${usesApi2017 ? "2017+" : "2019+"}] Adding user assigned client id to the request.`);
+        this.logger.info(`[Managed Identity] [API version ${usesApi2017 ? "2017+" : "2019+"}] Adding user assigned client id to the request.`, "");
         return usesApi2017 ? ManagedIdentityUserAssignedIdQueryParameterNames.MANAGED_IDENTITY_CLIENT_ID_2017 : ManagedIdentityUserAssignedIdQueryParameterNames.MANAGED_IDENTITY_CLIENT_ID;
       case ManagedIdentityIdType.USER_ASSIGNED_RESOURCE_ID:
-        this.logger.info("[Managed Identity] Adding user assigned resource id to the request.");
+        this.logger.info("[Managed Identity] Adding user assigned resource id to the request.", "");
         return isImds ? ManagedIdentityUserAssignedIdQueryParameterNames.MANAGED_IDENTITY_RESOURCE_ID_IMDS : ManagedIdentityUserAssignedIdQueryParameterNames.MANAGED_IDENTITY_RESOURCE_ID_NON_IMDS;
       case ManagedIdentityIdType.USER_ASSIGNED_OBJECT_ID:
-        this.logger.info("[Managed Identity] Adding user assigned object id to the request.");
+        this.logger.info("[Managed Identity] Adding user assigned object id to the request.", "");
         return ManagedIdentityUserAssignedIdQueryParameterNames.MANAGED_IDENTITY_OBJECT_ID;
       default:
         throw createManagedIdentityError(invalidManagedIdentityIdType);
@@ -40872,7 +41263,7 @@ BaseManagedIdentitySource.getValidatedEnvVariableUrlString = (envVariableStringN
   try {
     return new UrlString(envVariable).urlString;
   } catch (error2) {
-    logger31.info(`[Managed Identity] ${sourceName} managed identity is unavailable because the '${envVariableStringName}' environment variable is malformed.`);
+    logger31.info(`[Managed Identity] ${sourceName} managed identity is unavailable because the '${envVariableStringName}' environment variable is malformed.`, "");
     throw createManagedIdentityError(MsiEnvironmentVariableUrlMalformedErrorCodes[envVariableStringName]);
   }
 };
@@ -40903,12 +41294,12 @@ var LinearRetryStrategy = class {
 var DEFAULT_MANAGED_IDENTITY_MAX_RETRIES = 3;
 var DEFAULT_MANAGED_IDENTITY_RETRY_DELAY_MS = 1e3;
 var DEFAULT_MANAGED_IDENTITY_HTTP_STATUS_CODES_TO_RETRY_ON = [
-  HttpStatus.NOT_FOUND,
-  HttpStatus.REQUEST_TIMEOUT,
-  HttpStatus.TOO_MANY_REQUESTS,
-  HttpStatus.SERVER_ERROR,
-  HttpStatus.SERVICE_UNAVAILABLE,
-  HttpStatus.GATEWAY_TIMEOUT
+  Constants_exports.HTTP_NOT_FOUND,
+  Constants_exports.HTTP_REQUEST_TIMEOUT,
+  Constants_exports.HTTP_TOO_MANY_REQUESTS,
+  Constants_exports.HTTP_SERVER_ERROR,
+  Constants_exports.HTTP_SERVICE_UNAVAILABLE,
+  Constants_exports.HTTP_GATEWAY_TIMEOUT
 ];
 var DefaultManagedIdentityRetryPolicy = class _DefaultManagedIdentityRetryPolicy {
   constructor() {
@@ -40924,7 +41315,7 @@ var DefaultManagedIdentityRetryPolicy = class _DefaultManagedIdentityRetryPolicy
   async pauseForRetry(httpStatusCode, currentRetry, logger31, retryAfterHeader) {
     if (DEFAULT_MANAGED_IDENTITY_HTTP_STATUS_CODES_TO_RETRY_ON.includes(httpStatusCode) && currentRetry < DEFAULT_MANAGED_IDENTITY_MAX_RETRIES) {
       const retryAfterDelay = this.linearRetryStrategy.calculateDelay(retryAfterHeader, _DefaultManagedIdentityRetryPolicy.DEFAULT_MANAGED_IDENTITY_RETRY_DELAY_MS);
-      logger31.verbose(`Retrying request in ${retryAfterDelay}ms (retry attempt: ${currentRetry + 1})`);
+      logger31.verbose(`Retrying request in ${retryAfterDelay}ms (retry attempt: ${currentRetry + 1})`, "");
       await new Promise((resolve) => {
         return setTimeout(resolve, retryAfterDelay);
       });
@@ -40947,7 +41338,7 @@ var ManagedIdentityRequestParameters = class {
   computeUri() {
     const parameters = /* @__PURE__ */ new Map();
     if (this.queryParameters) {
-      RequestParameterBuilder_exports.addExtraQueryParameters(parameters, this.queryParameters);
+      RequestParameterBuilder_exports.addExtraParameters(parameters, this.queryParameters);
     }
     const queryParametersString = UrlUtils_exports.mapToQueryString(parameters);
     return UrlString.appendQueryString(this._baseEndpoint, queryParametersString);
@@ -40955,7 +41346,7 @@ var ManagedIdentityRequestParameters = class {
   computeParametersBodyString() {
     const parameters = /* @__PURE__ */ new Map();
     if (this.bodyParameters) {
-      RequestParameterBuilder_exports.addExtraQueryParameters(parameters, this.bodyParameters);
+      RequestParameterBuilder_exports.addExtraParameters(parameters, this.bodyParameters);
     }
     return UrlUtils_exports.mapToQueryString(parameters);
   }
@@ -40964,31 +41355,79 @@ var ManagedIdentityRequestParameters = class {
 // node_modules/@azure/msal-node/dist/client/ManagedIdentitySources/AppService.mjs
 var APP_SERVICE_MSI_API_VERSION = "2019-08-01";
 var AppService = class _AppService extends BaseManagedIdentitySource {
+  /**
+   * Creates a new instance of the AppService managed identity source.
+   *
+   * @param logger - Logger instance for diagnostic output
+   * @param nodeStorage - Node.js storage implementation for caching
+   * @param networkClient - Network client for making HTTP requests
+   * @param cryptoProvider - Cryptographic operations provider
+   * @param disableInternalRetries - Whether to disable internal retry logic
+   * @param identityEndpoint - The App Service identity endpoint URL
+   * @param identityHeader - The secret header value required for authentication
+   */
   constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader) {
     super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.identityEndpoint = identityEndpoint;
     this.identityHeader = identityHeader;
   }
+  /**
+   * Retrieves the required environment variables for App Service managed identity.
+   *
+   * App Service managed identity requires two environment variables:
+   * - IDENTITY_ENDPOINT: The URL of the local metadata service
+   * - IDENTITY_HEADER: A secret header value for authentication
+   *
+   * @returns An array containing [identityEndpoint, identityHeader] values from environment variables.
+   *          Either value may be undefined if the environment variable is not set.
+   */
   static getEnvironmentVariables() {
     const identityEndpoint = process.env[ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT];
     const identityHeader = process.env[ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER];
     return [identityEndpoint, identityHeader];
   }
+  /**
+   * Attempts to create an AppService managed identity source if the environment supports it.
+   *
+   * This method checks for the presence of required environment variables and validates
+   * the identity endpoint URL. If the environment is not suitable for App Service managed
+   * identity (missing environment variables or invalid endpoint), it returns null.
+   *
+   * @param logger - Logger instance for diagnostic output
+   * @param nodeStorage - Node.js storage implementation for caching
+   * @param networkClient - Network client for making HTTP requests
+   * @param cryptoProvider - Cryptographic operations provider
+   * @param disableInternalRetries - Whether to disable internal retry logic
+   *
+   * @returns A new AppService instance if the environment is suitable, null otherwise
+   */
   static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
     const [identityEndpoint, identityHeader] = _AppService.getEnvironmentVariables();
     if (!identityEndpoint || !identityHeader) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.APP_SERVICE} managed identity is unavailable because one or both of the '${ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER}' and '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' environment variables are not defined.`);
+      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.APP_SERVICE} managed identity is unavailable because one or both of the '${ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER}' and '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' environment variables are not defined.`, "");
       return null;
     }
     const validatedIdentityEndpoint = _AppService.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT, identityEndpoint, ManagedIdentitySourceNames.APP_SERVICE, logger31);
-    logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.APP_SERVICE} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.APP_SERVICE} managed identity.`);
+    logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.APP_SERVICE} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.APP_SERVICE} managed identity.`, "");
     return new _AppService(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader);
   }
+  /**
+   * Creates a managed identity token request for the App Service environment.
+   *
+   * This method constructs an HTTP GET request to the App Service identity endpoint
+   * with the required headers, query parameters, and managed identity configuration.
+   * The request includes the secret header for authentication and appropriate API version.
+   *
+   * @param resource - The target resource/scope for which to request an access token (e.g., "https://graph.microsoft.com/.default")
+   * @param managedIdentityId - The managed identity configuration specifying whether to use system-assigned or user-assigned identity
+   *
+   * @returns A configured ManagedIdentityRequestParameters object ready for network execution
+   */
   createRequest(resource, managedIdentityId) {
-    const request5 = new ManagedIdentityRequestParameters(HttpMethod.GET, this.identityEndpoint);
-    request5.headers[APP_SERVICE_SECRET_HEADER_NAME] = this.identityHeader;
-    request5.queryParameters[API_VERSION_QUERY_PARAMETER_NAME] = APP_SERVICE_MSI_API_VERSION;
-    request5.queryParameters[RESOURCE_BODY_OR_QUERY_PARAMETER_NAME] = resource;
+    const request5 = new ManagedIdentityRequestParameters(HttpMethod2.GET, this.identityEndpoint);
+    request5.headers[ManagedIdentityHeaders.APP_SERVICE_SECRET_HEADER_NAME] = this.identityHeader;
+    request5.queryParameters[ManagedIdentityQueryParameters.API_VERSION] = APP_SERVICE_MSI_API_VERSION;
+    request5.queryParameters[ManagedIdentityQueryParameters.RESOURCE] = resource;
     if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
       request5.queryParameters[this.getManagedIdentityUserAssignedIdQueryParameterKey(managedIdentityId.idType)] = managedIdentityId.id;
     }
@@ -41011,10 +41450,31 @@ var AZURE_ARC_FILE_DETECTION = {
   linux: "/opt/azcmagent/bin/himds"
 };
 var AzureArc = class _AzureArc extends BaseManagedIdentitySource {
+  /**
+   * Creates a new instance of the AzureArc managed identity source.
+   *
+   * @param logger - Logger instance for capturing telemetry and diagnostic information
+   * @param nodeStorage - Storage implementation for caching tokens and metadata
+   * @param networkClient - Network client for making HTTP requests to the identity endpoint
+   * @param cryptoProvider - Cryptographic operations provider for token validation and encryption
+   * @param disableInternalRetries - Flag to disable automatic retry logic for failed requests
+   * @param identityEndpoint - The Azure Arc identity endpoint URL for token requests
+   */
   constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint) {
     super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.identityEndpoint = identityEndpoint;
   }
+  /**
+   * Retrieves and validates Azure Arc environment variables for managed identity configuration.
+   *
+   * This method checks for IDENTITY_ENDPOINT and IMDS_ENDPOINT environment variables.
+   * If either is missing, it attempts to detect the Azure Arc environment by checking for
+   * the HIMDS executable at platform-specific paths. On successful detection, it returns
+   * the default identity endpoint and a helper string indicating file-based detection.
+   *
+   * @returns An array containing [identityEndpoint, imdsEndpoint] where both values are
+   *          strings if Azure Arc is available, or undefined if not available.
+   */
   static getEnvironmentVariables() {
     let identityEndpoint = process.env[ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT];
     let imdsEndpoint = process.env[ManagedIdentityEnvironmentVariableNames.IMDS_ENDPOINT];
@@ -41029,35 +41489,89 @@ var AzureArc = class _AzureArc extends BaseManagedIdentitySource {
     }
     return [identityEndpoint, imdsEndpoint];
   }
+  /**
+   * Attempts to create an AzureArc managed identity source instance.
+   *
+   * Validates the Azure Arc environment by checking environment variables
+   * and performing file-based detection. It ensures that only system-assigned managed identities
+   * are supported for Azure Arc scenarios. The method performs comprehensive validation of
+   * endpoint URLs and logs detailed information about the detection process.
+   *
+   * @param logger - Logger instance for capturing creation and validation steps
+   * @param nodeStorage - Storage implementation for the managed identity source
+   * @param networkClient - Network client for HTTP communication
+   * @param cryptoProvider - Cryptographic operations provider
+   * @param disableInternalRetries - Whether to disable automatic retry mechanisms
+   * @param managedIdentityId - The managed identity configuration, must be system-assigned
+   *
+   * @returns AzureArc instance if the environment supports Azure Arc managed identity, null otherwise
+   *
+   * @throws {ManagedIdentityError} When a user-assigned managed identity is specified (not supported for Azure Arc)
+   */
   static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
     const [identityEndpoint, imdsEndpoint] = _AzureArc.getEnvironmentVariables();
     if (!identityEndpoint || !imdsEndpoint) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is unavailable through environment variables because one or both of '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' and '${ManagedIdentityEnvironmentVariableNames.IMDS_ENDPOINT}' are not defined. ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is also unavailable through file detection.`);
+      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is unavailable through environment variables because one or both of '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' and '${ManagedIdentityEnvironmentVariableNames.IMDS_ENDPOINT}' are not defined. ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is also unavailable through file detection.`, "");
       return null;
     }
     if (imdsEndpoint === HIMDS_EXECUTABLE_HELPER_STRING) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is available through file detection. Defaulting to known ${ManagedIdentitySourceNames.AZURE_ARC} endpoint: ${DEFAULT_AZURE_ARC_IDENTITY_ENDPOINT}. Creating ${ManagedIdentitySourceNames.AZURE_ARC} managed identity.`);
+      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is available through file detection. Defaulting to known ${ManagedIdentitySourceNames.AZURE_ARC} endpoint: ${DEFAULT_AZURE_ARC_IDENTITY_ENDPOINT}. Creating ${ManagedIdentitySourceNames.AZURE_ARC} managed identity.`, "");
     } else {
       const validatedIdentityEndpoint = _AzureArc.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT, identityEndpoint, ManagedIdentitySourceNames.AZURE_ARC, logger31);
       validatedIdentityEndpoint.endsWith("/") ? validatedIdentityEndpoint.slice(0, -1) : validatedIdentityEndpoint;
       _AzureArc.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IMDS_ENDPOINT, imdsEndpoint, ManagedIdentitySourceNames.AZURE_ARC, logger31);
-      logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.AZURE_ARC} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.AZURE_ARC} managed identity.`);
+      logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.AZURE_ARC} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.AZURE_ARC} managed identity.`, "");
     }
     if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
       throw createManagedIdentityError(unableToCreateAzureArc);
     }
     return new _AzureArc(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint);
   }
+  /**
+   * Creates a properly formatted HTTP request for acquiring tokens from the Azure Arc identity endpoint.
+   *
+   * This method constructs a GET request to the Azure Arc HIMDS endpoint with the required metadata header
+   * and query parameters. The endpoint URL is normalized to use 127.0.0.1 instead of localhost for
+   * consistency. Additional body parameters are calculated by the base class during token acquisition.
+   *
+   * @param resource - The target resource/scope for which to request an access token (e.g., "https://graph.microsoft.com/.default")
+   *
+   * @returns A configured ManagedIdentityRequestParameters object ready for network execution
+   */
   createRequest(resource) {
-    const request5 = new ManagedIdentityRequestParameters(HttpMethod.GET, this.identityEndpoint.replace("localhost", "127.0.0.1"));
-    request5.headers[METADATA_HEADER_NAME] = "true";
-    request5.queryParameters[API_VERSION_QUERY_PARAMETER_NAME] = ARC_API_VERSION;
-    request5.queryParameters[RESOURCE_BODY_OR_QUERY_PARAMETER_NAME] = resource;
+    const request5 = new ManagedIdentityRequestParameters(HttpMethod2.GET, this.identityEndpoint.replace("localhost", "127.0.0.1"));
+    request5.headers[ManagedIdentityHeaders.METADATA_HEADER_NAME] = "true";
+    request5.queryParameters[ManagedIdentityQueryParameters.API_VERSION] = ARC_API_VERSION;
+    request5.queryParameters[ManagedIdentityQueryParameters.RESOURCE] = resource;
     return request5;
   }
+  /**
+   * Processes the server response and handles Azure Arc-specific authentication challenges.
+   *
+   * This method implements the Azure Arc authentication flow which may require reading a secret file
+   * for authorization. When the initial request returns HTTP 401 Unauthorized, it extracts the file
+   * path from the WWW-Authenticate header, validates the file location and size, reads the secret,
+   * and retries the request with Basic authentication. The method includes comprehensive security
+   * validations to prevent path traversal and ensure file integrity.
+   *
+   * @param originalResponse - The initial HTTP response from the identity endpoint
+   * @param networkClient - Network client for making the retry request if needed
+   * @param networkRequest - The original request parameters (modified with auth header for retry)
+   * @param networkRequestOptions - Additional options for network requests
+   *
+   * @returns A promise that resolves to the server token response with access token and metadata
+   *
+   * @throws {ManagedIdentityError} When:
+   *   - WWW-Authenticate header is missing or has unsupported format
+   *   - Platform is not supported (not Windows or Linux)
+   *   - Secret file has invalid extension (not .key)
+   *   - Secret file path doesn't match expected platform path
+   *   - Secret file cannot be read or is too large (>4096 bytes)
+   * @throws {ClientAuthError} When network errors occur during retry request
+   */
   async getServerTokenResponseAsync(originalResponse, networkClient, networkRequest, networkRequestOptions) {
     let retryResponse;
-    if (originalResponse.status === HttpStatus.UNAUTHORIZED) {
+    if (originalResponse.status === Constants_exports.HTTP_UNAUTHORIZED) {
       const wwwAuthHeader = originalResponse.headers["www-authenticate"];
       if (!wwwAuthHeader) {
         throw createManagedIdentityError(wwwAuthenticateHeaderMissing);
@@ -41088,13 +41602,13 @@ var AzureArc = class _AzureArc extends BaseManagedIdentitySource {
       }
       let secret;
       try {
-        secret = (0, import_fs2.readFileSync)(secretFilePath, "utf-8");
+        secret = (0, import_fs2.readFileSync)(secretFilePath, Constants_exports.EncodingTypes.UTF8);
       } catch (e) {
         throw createManagedIdentityError(unableToReadSecretFile);
       }
       const authHeaderValue = `Basic ${secret}`;
-      this.logger.info(`[Managed Identity] Adding authorization header to the request.`);
-      networkRequest.headers[AUTHORIZATION_HEADER_NAME] = authHeaderValue;
+      this.logger.info(`[Managed Identity] Adding authorization header to the request.`, "");
+      networkRequest.headers[ManagedIdentityHeaders.AUTHORIZATION_HEADER_NAME] = authHeaderValue;
       try {
         retryResponse = await networkClient.sendGetRequestAsync(networkRequest.computeUri(), networkRequestOptions);
       } catch (error2) {
@@ -41111,31 +41625,79 @@ var AzureArc = class _AzureArc extends BaseManagedIdentitySource {
 
 // node_modules/@azure/msal-node/dist/client/ManagedIdentitySources/CloudShell.mjs
 var CloudShell = class _CloudShell extends BaseManagedIdentitySource {
+  /**
+   * Creates a new CloudShell managed identity source instance.
+   *
+   * @param logger - Logger instance for diagnostic logging
+   * @param nodeStorage - Node.js storage implementation for caching
+   * @param networkClient - HTTP client for making requests to the managed identity endpoint
+   * @param cryptoProvider - Cryptographic operations provider
+   * @param disableInternalRetries - Whether to disable automatic retry logic for failed requests
+   * @param msiEndpoint - The MSI endpoint URL obtained from environment variables
+   */
   constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint) {
     super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.msiEndpoint = msiEndpoint;
   }
+  /**
+   * Retrieves the required environment variables for Cloud Shell managed identity.
+   *
+   * Cloud Shell requires the MSI_ENDPOINT environment variable to be set, which
+   * contains the URL of the managed identity service endpoint.
+   *
+   * @returns An array containing the MSI_ENDPOINT environment variable value (or undefined if not set)
+   */
   static getEnvironmentVariables() {
     const msiEndpoint = process.env[ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT];
     return [msiEndpoint];
   }
+  /**
+   * Attempts to create a CloudShell managed identity source instance.
+   *
+   * This method validates that the required environment variables are present and
+   * creates a CloudShell instance if the environment is properly configured.
+   * Cloud Shell only supports system-assigned managed identities.
+   *
+   * @param logger - Logger instance for diagnostic logging
+   * @param nodeStorage - Node.js storage implementation for caching
+   * @param networkClient - HTTP client for making requests
+   * @param cryptoProvider - Cryptographic operations provider
+   * @param disableInternalRetries - Whether to disable automatic retry logic
+   * @param managedIdentityId - The managed identity configuration (must be system-assigned)
+   *
+   * @returns A CloudShell instance if the environment is valid, null otherwise
+   *
+   * @throws {ManagedIdentityError} When a user-assigned managed identity is requested,
+   *         as Cloud Shell only supports system-assigned identities
+   */
   static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
     const [msiEndpoint] = _CloudShell.getEnvironmentVariables();
     if (!msiEndpoint) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity is unavailable because the '${ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT} environment variable is not defined.`);
+      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity is unavailable because the '${ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT} environment variable is not defined.`, "");
       return null;
     }
     const validatedMsiEndpoint = _CloudShell.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT, msiEndpoint, ManagedIdentitySourceNames.CLOUD_SHELL, logger31);
-    logger31.info(`[Managed Identity] Environment variable validation passed for ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity. Endpoint URI: ${validatedMsiEndpoint}. Creating ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity.`);
+    logger31.info(`[Managed Identity] Environment variable validation passed for ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity. Endpoint URI: ${validatedMsiEndpoint}. Creating ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity.`, "");
     if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
       throw createManagedIdentityError(unableToCreateCloudShell);
     }
     return new _CloudShell(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint);
   }
+  /**
+   * Creates an HTTP request to acquire an access token from the Cloud Shell managed identity endpoint.
+   *
+   * This method constructs a POST request to the MSI endpoint with the required headers and
+   * body parameters for Cloud Shell authentication. The request includes the target resource
+   * for which the access token is being requested.
+   *
+   * @param resource - The target resource/scope for which to request an access token (e.g., "https://graph.microsoft.com/.default")
+   *
+   * @returns A configured ManagedIdentityRequestParameters object ready for network execution
+   */
   createRequest(resource) {
-    const request5 = new ManagedIdentityRequestParameters(HttpMethod.POST, this.msiEndpoint);
-    request5.headers[METADATA_HEADER_NAME] = "true";
-    request5.bodyParameters[RESOURCE_BODY_OR_QUERY_PARAMETER_NAME] = resource;
+    const request5 = new ManagedIdentityRequestParameters(HttpMethod2.POST, this.msiEndpoint);
+    request5.headers[ManagedIdentityHeaders.METADATA_HEADER_NAME] = "true";
+    request5.bodyParameters[ManagedIdentityQueryParameters.RESOURCE] = resource;
     return request5;
   }
 };
@@ -41173,10 +41735,10 @@ var ExponentialRetryStrategy = class {
 
 // node_modules/@azure/msal-node/dist/retry/ImdsRetryPolicy.mjs
 var HTTP_STATUS_400_CODES_FOR_EXPONENTIAL_STRATEGY = [
-  HttpStatus.NOT_FOUND,
-  HttpStatus.REQUEST_TIMEOUT,
-  HttpStatus.GONE,
-  HttpStatus.TOO_MANY_REQUESTS
+  Constants_exports.HTTP_NOT_FOUND,
+  Constants_exports.HTTP_REQUEST_TIMEOUT,
+  Constants_exports.HTTP_GONE,
+  Constants_exports.HTTP_TOO_MANY_REQUESTS
 ];
 var EXPONENTIAL_STRATEGY_NUM_RETRIES = 3;
 var LINEAR_STRATEGY_NUM_RETRIES = 7;
@@ -41218,11 +41780,11 @@ var ImdsRetryPolicy = class _ImdsRetryPolicy {
   async pauseForRetry(httpStatusCode, currentRetry, logger31) {
     if (this._isNewRequest) {
       this._isNewRequest = false;
-      this.maxRetries = httpStatusCode === HttpStatus.GONE ? LINEAR_STRATEGY_NUM_RETRIES : EXPONENTIAL_STRATEGY_NUM_RETRIES;
+      this.maxRetries = httpStatusCode === Constants_exports.HTTP_GONE ? LINEAR_STRATEGY_NUM_RETRIES : EXPONENTIAL_STRATEGY_NUM_RETRIES;
     }
-    if ((HTTP_STATUS_400_CODES_FOR_EXPONENTIAL_STRATEGY.includes(httpStatusCode) || httpStatusCode >= HttpStatus.SERVER_ERROR_RANGE_START && httpStatusCode <= HttpStatus.SERVER_ERROR_RANGE_END && currentRetry < this.maxRetries) && currentRetry < this.maxRetries) {
-      const retryAfterDelay = httpStatusCode === HttpStatus.GONE ? _ImdsRetryPolicy.HTTP_STATUS_GONE_RETRY_AFTER_MS : this.exponentialRetryStrategy.calculateDelay(currentRetry);
-      logger31.verbose(`Retrying request in ${retryAfterDelay}ms (retry attempt: ${currentRetry + 1})`);
+    if ((HTTP_STATUS_400_CODES_FOR_EXPONENTIAL_STRATEGY.includes(httpStatusCode) || httpStatusCode >= Constants_exports.HTTP_SERVER_ERROR_RANGE_START && httpStatusCode <= Constants_exports.HTTP_SERVER_ERROR_RANGE_END && currentRetry < this.maxRetries) && currentRetry < this.maxRetries) {
+      const retryAfterDelay = httpStatusCode === Constants_exports.HTTP_GONE ? _ImdsRetryPolicy.HTTP_STATUS_GONE_RETRY_AFTER_MS : this.exponentialRetryStrategy.calculateDelay(currentRetry);
+      logger31.verbose(`Retrying request in ${retryAfterDelay}ms (retry attempt: ${currentRetry + 1})`, "");
       await new Promise((resolve) => {
         return setTimeout(resolve, retryAfterDelay);
       });
@@ -41237,26 +41799,71 @@ var IMDS_TOKEN_PATH = "/metadata/identity/oauth2/token";
 var DEFAULT_IMDS_ENDPOINT = `http://169.254.169.254${IMDS_TOKEN_PATH}`;
 var IMDS_API_VERSION = "2018-02-01";
 var Imds = class _Imds extends BaseManagedIdentitySource {
+  /**
+   * Constructs an Imds instance with the specified configuration.
+   *
+   * @param logger - Logger instance for recording debug information and errors
+   * @param nodeStorage - NodeStorage instance used for token caching operations
+   * @param networkClient - Network client implementation for making HTTP requests to IMDS
+   * @param cryptoProvider - CryptoProvider for generating correlation IDs and other cryptographic operations
+   * @param disableInternalRetries - When true, disables the built-in retry logic for IMDS requests
+   * @param identityEndpoint - The complete IMDS endpoint URL including the token path
+   */
   constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint) {
     super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.identityEndpoint = identityEndpoint;
   }
+  /**
+   * Creates an Imds instance with the appropriate endpoint configuration.
+   *
+   * This method checks for the presence of the AZURE_POD_IDENTITY_AUTHORITY_HOST environment
+   * variable, which is used in Azure Kubernetes Service (AKS) environments with Azure AD
+   * Pod Identity. If found, it uses that endpoint; otherwise, it falls back to the standard
+   * IMDS endpoint (169.254.169.254).
+   *
+   * @param logger - Logger instance for recording endpoint discovery and validation
+   * @param nodeStorage - NodeStorage instance for token caching
+   * @param networkClient - Network client for HTTP requests
+   * @param cryptoProvider - CryptoProvider for cryptographic operations
+   * @param disableInternalRetries - Whether to disable built-in retry logic
+   *
+   * @returns A configured Imds instance ready to make token requests
+   */
   static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
     let validatedIdentityEndpoint;
     if (process.env[ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST]) {
-      logger31.info(`[Managed Identity] Environment variable ${ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST} for ${ManagedIdentitySourceNames.IMDS} returned endpoint: ${process.env[ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST]}`);
+      logger31.info(`[Managed Identity] Environment variable ${ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST} for ${ManagedIdentitySourceNames.IMDS} returned endpoint: ${process.env[ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST]}`, "");
       validatedIdentityEndpoint = _Imds.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST, `${process.env[ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST]}${IMDS_TOKEN_PATH}`, ManagedIdentitySourceNames.IMDS, logger31);
     } else {
-      logger31.info(`[Managed Identity] Unable to find ${ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST} environment variable for ${ManagedIdentitySourceNames.IMDS}, using the default endpoint.`);
+      logger31.info(`[Managed Identity] Unable to find ${ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST} environment variable for ${ManagedIdentitySourceNames.IMDS}, using the default endpoint.`, "");
       validatedIdentityEndpoint = DEFAULT_IMDS_ENDPOINT;
     }
     return new _Imds(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, validatedIdentityEndpoint);
   }
+  /**
+   * Creates a properly configured HTTP request for acquiring an access token from IMDS.
+   *
+   * This method builds a complete request object with all necessary headers, query parameters,
+   * and retry policies required by the Azure Instance Metadata Service.
+   *
+   * Key request components:
+   * - HTTP GET method to the IMDS token endpoint
+   * - Metadata header set to "true" (required by IMDS)
+   * - API version parameter (currently "2018-02-01")
+   * - Resource parameter specifying the target audience
+   * - Identity-specific parameters for user-assigned managed identities
+   * - IMDS-specific retry policy
+   *
+   * @param resource - The target resource/scope for which to request an access token (e.g., "https://graph.microsoft.com/.default")
+   * @param managedIdentityId - The managed identity configuration specifying whether to use system-assigned or user-assigned identity
+   *
+   * @returns A configured ManagedIdentityRequestParameters object ready for network execution
+   */
   createRequest(resource, managedIdentityId) {
-    const request5 = new ManagedIdentityRequestParameters(HttpMethod.GET, this.identityEndpoint);
-    request5.headers[METADATA_HEADER_NAME] = "true";
-    request5.queryParameters[API_VERSION_QUERY_PARAMETER_NAME] = IMDS_API_VERSION;
-    request5.queryParameters[RESOURCE_BODY_OR_QUERY_PARAMETER_NAME] = resource;
+    const request5 = new ManagedIdentityRequestParameters(HttpMethod2.GET, this.identityEndpoint);
+    request5.headers[ManagedIdentityHeaders.METADATA_HEADER_NAME] = "true";
+    request5.queryParameters[ManagedIdentityQueryParameters.API_VERSION] = IMDS_API_VERSION;
+    request5.queryParameters[ManagedIdentityQueryParameters.RESOURCE] = resource;
     if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
       request5.queryParameters[this.getManagedIdentityUserAssignedIdQueryParameterKey(
         managedIdentityId.idType,
@@ -41272,35 +41879,99 @@ var Imds = class _Imds extends BaseManagedIdentitySource {
 // node_modules/@azure/msal-node/dist/client/ManagedIdentitySources/ServiceFabric.mjs
 var SERVICE_FABRIC_MSI_API_VERSION = "2019-07-01-preview";
 var ServiceFabric = class _ServiceFabric extends BaseManagedIdentitySource {
+  /**
+   * Constructs a new ServiceFabric managed identity source for acquiring tokens from Azure Service Fabric clusters.
+   *
+   * Service Fabric managed identity allows applications running in Service Fabric clusters to authenticate
+   * without storing credentials in code. This source handles token acquisition using the Service Fabric
+   * Managed Identity Token Service (MITS).
+   *
+   * @param logger - Logger instance for logging authentication events and debugging information
+   * @param nodeStorage - NodeStorage instance for caching tokens and other authentication artifacts
+   * @param networkClient - Network client for making HTTP requests to the Service Fabric identity endpoint
+   * @param cryptoProvider - Crypto provider for cryptographic operations like token validation
+   * @param disableInternalRetries - Whether to disable internal retry logic for failed requests
+   * @param identityEndpoint - The Service Fabric managed identity endpoint URL
+   * @param identityHeader - The Service Fabric managed identity secret header value
+   */
   constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader) {
     super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.identityEndpoint = identityEndpoint;
     this.identityHeader = identityHeader;
   }
+  /**
+   * Retrieves the environment variables required for Service Fabric managed identity authentication.
+   *
+   * Service Fabric managed identity requires three specific environment variables to be set by the
+   * Service Fabric runtime:
+   * - IDENTITY_ENDPOINT: The endpoint URL for the Managed Identity Token Service (MITS)
+   * - IDENTITY_HEADER: A secret value used for authentication with the MITS
+   * - IDENTITY_SERVER_THUMBPRINT: The thumbprint of the MITS server certificate for secure communication
+   *
+   * @returns An array containing the identity endpoint, identity header, and identity server thumbprint values.
+   *          Elements will be undefined if the corresponding environment variables are not set.
+   */
   static getEnvironmentVariables() {
     const identityEndpoint = process.env[ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT];
     const identityHeader = process.env[ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER];
     const identityServerThumbprint = process.env[ManagedIdentityEnvironmentVariableNames.IDENTITY_SERVER_THUMBPRINT];
     return [identityEndpoint, identityHeader, identityServerThumbprint];
   }
+  /**
+   * Attempts to create a ServiceFabric managed identity source if the runtime environment supports it.
+   *
+   * Checks for the presence of all required Service Fabric environment variables
+   * and validates the endpoint URL format. It will only create a ServiceFabric instance if the application
+   * is running in a properly configured Service Fabric cluster with managed identity enabled.
+   *
+   * Note: User-assigned managed identities must be configured at the cluster level, not at runtime.
+   * This method will log a warning if a user-assigned identity is requested.
+   *
+   * @param logger - Logger instance for logging creation events and validation results
+   * @param nodeStorage - NodeStorage instance for caching tokens and authentication artifacts
+   * @param networkClient - Network client for making HTTP requests to the identity endpoint
+   * @param cryptoProvider - Crypto provider for cryptographic operations
+   * @param disableInternalRetries - Whether to disable internal retry logic for failed requests
+   * @param managedIdentityId - Managed identity identifier specifying system-assigned or user-assigned identity
+   *
+   * @returns A ServiceFabric instance if all environment variables are valid and present, otherwise null
+   */
   static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
     const [identityEndpoint, identityHeader, identityServerThumbprint] = _ServiceFabric.getEnvironmentVariables();
     if (!identityEndpoint || !identityHeader || !identityServerThumbprint) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity is unavailable because one or all of the '${ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER}', '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' or '${ManagedIdentityEnvironmentVariableNames.IDENTITY_SERVER_THUMBPRINT}' environment variables are not defined.`);
+      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity is unavailable because one or all of the '${ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER}', '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' or '${ManagedIdentityEnvironmentVariableNames.IDENTITY_SERVER_THUMBPRINT}' environment variables are not defined.`, "");
       return null;
     }
     const validatedIdentityEndpoint = _ServiceFabric.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT, identityEndpoint, ManagedIdentitySourceNames.SERVICE_FABRIC, logger31);
-    logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity.`);
+    logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity.`, "");
     if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
-      logger31.warning(`[Managed Identity] ${ManagedIdentitySourceNames.SERVICE_FABRIC} user assigned managed identity is configured in the cluster, not during runtime. See also: https://learn.microsoft.com/en-us/azure/service-fabric/configure-existing-cluster-enable-managed-identity-token-service.`);
+      logger31.warning(`[Managed Identity] ${ManagedIdentitySourceNames.SERVICE_FABRIC} user assigned managed identity is configured in the cluster, not during runtime. See also: https://learn.microsoft.com/en-us/azure/service-fabric/configure-existing-cluster-enable-managed-identity-token-service.`, "");
     }
     return new _ServiceFabric(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader);
   }
+  /**
+   * Creates HTTP request parameters for acquiring an access token from the Service Fabric Managed Identity Token Service (MITS).
+   *
+   * This method constructs a properly formatted HTTP GET request that includes:
+   * - The secret header for authentication with MITS
+   * - API version parameter for the Service Fabric MSI endpoint
+   * - Resource parameter specifying the target Azure service
+   * - Optional identity parameters for user-assigned managed identities
+   *
+   * The request follows the Service Fabric managed identity protocol and uses the 2019-07-01-preview API version.
+   * For user-assigned identities, the appropriate query parameter (client_id, object_id, or resource_id) is added
+   * based on the identity type.
+   *
+   * @param resource - The Azure resource URI for which the access token is requested (e.g., "https://vault.azure.net/")
+   * @param managedIdentityId - The managed identity configuration specifying system-assigned or user-assigned identity details
+   *
+   * @returns A configured ManagedIdentityRequestParameters object ready for network execution
+   */
   createRequest(resource, managedIdentityId) {
-    const request5 = new ManagedIdentityRequestParameters(HttpMethod.GET, this.identityEndpoint);
-    request5.headers[ML_AND_SF_SECRET_HEADER_NAME] = this.identityHeader;
-    request5.queryParameters[API_VERSION_QUERY_PARAMETER_NAME] = SERVICE_FABRIC_MSI_API_VERSION;
-    request5.queryParameters[RESOURCE_BODY_OR_QUERY_PARAMETER_NAME] = resource;
+    const request5 = new ManagedIdentityRequestParameters(HttpMethod2.GET, this.identityEndpoint);
+    request5.headers[ManagedIdentityHeaders.ML_AND_SF_SECRET_HEADER_NAME] = this.identityHeader;
+    request5.queryParameters[ManagedIdentityQueryParameters.API_VERSION] = SERVICE_FABRIC_MSI_API_VERSION;
+    request5.queryParameters[ManagedIdentityQueryParameters.RESOURCE] = resource;
     if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
       request5.queryParameters[this.getManagedIdentityUserAssignedIdQueryParameterKey(managedIdentityId.idType)] = managedIdentityId.id;
     }
@@ -41310,34 +41981,95 @@ var ServiceFabric = class _ServiceFabric extends BaseManagedIdentitySource {
 
 // node_modules/@azure/msal-node/dist/client/ManagedIdentitySources/MachineLearning.mjs
 var MACHINE_LEARNING_MSI_API_VERSION = "2017-09-01";
+var MANAGED_IDENTITY_MACHINE_LEARNING_UNSUPPORTED_ID_TYPE_ERROR = `Only client id is supported for user-assigned managed identity in ${ManagedIdentitySourceNames.MACHINE_LEARNING}.`;
 var MachineLearning = class _MachineLearning extends BaseManagedIdentitySource {
+  /**
+   * Creates a new MachineLearning managed identity source instance.
+   *
+   * @param logger - Logger instance for diagnostic information
+   * @param nodeStorage - Node storage implementation for caching
+   * @param networkClient - Network client for making HTTP requests
+   * @param cryptoProvider - Cryptographic operations provider
+   * @param disableInternalRetries - Whether to disable automatic request retries
+   * @param msiEndpoint - The MSI endpoint URL from environment variables
+   * @param secret - The MSI secret from environment variables
+   */
   constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint, secret) {
     super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.msiEndpoint = msiEndpoint;
     this.secret = secret;
   }
+  /**
+   * Retrieves the required environment variables for Azure Machine Learning managed identity.
+   *
+   * This method checks for the presence of MSI_ENDPOINT and MSI_SECRET environment variables
+   * that are automatically set by the Azure Machine Learning platform when managed identity
+   * is enabled for the compute instance or cluster.
+   *
+   * @returns An array containing [msiEndpoint, secret] where either value may be undefined
+   *          if the corresponding environment variable is not set
+   */
   static getEnvironmentVariables() {
     const msiEndpoint = process.env[ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT];
     const secret = process.env[ManagedIdentityEnvironmentVariableNames.MSI_SECRET];
     return [msiEndpoint, secret];
   }
+  /**
+   * Attempts to create a MachineLearning managed identity source.
+   *
+   * This method validates the Azure Machine Learning environment by checking for the required
+   * MSI_ENDPOINT and MSI_SECRET environment variables. If both are present and valid,
+   * it creates and returns a MachineLearning instance. If either is missing or invalid,
+   * it returns null, indicating that this managed identity source is not available
+   * in the current environment.
+   *
+   * @param logger - Logger instance for diagnostic information
+   * @param nodeStorage - Node storage implementation for caching
+   * @param networkClient - Network client for making HTTP requests
+   * @param cryptoProvider - Cryptographic operations provider
+   * @param disableInternalRetries - Whether to disable automatic request retries
+   *
+   * @returns A new MachineLearning instance if the environment is valid, null otherwise
+   */
   static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
     const [msiEndpoint, secret] = _MachineLearning.getEnvironmentVariables();
     if (!msiEndpoint || !secret) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity is unavailable because one or both of the '${ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT}' and '${ManagedIdentityEnvironmentVariableNames.MSI_SECRET}' environment variables are not defined.`);
+      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity is unavailable because one or both of the '${ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT}' and '${ManagedIdentityEnvironmentVariableNames.MSI_SECRET}' environment variables are not defined.`, "");
       return null;
     }
     const validatedMsiEndpoint = _MachineLearning.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT, msiEndpoint, ManagedIdentitySourceNames.MACHINE_LEARNING, logger31);
-    logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity. Endpoint URI: ${validatedMsiEndpoint}. Creating ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity.`);
+    logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity. Endpoint URI: ${validatedMsiEndpoint}. Creating ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity.`, "");
     return new _MachineLearning(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint, secret);
   }
+  /**
+   * Creates a managed identity token request for Azure Machine Learning environments.
+   *
+   * This method constructs the HTTP request parameters needed to acquire an access token
+   * from the Azure Machine Learning managed identity endpoint. It handles both system-assigned
+   * and user-assigned managed identities with specific logic for each type:
+   *
+   * - System-assigned: Uses the DEFAULT_IDENTITY_CLIENT_ID environment variable
+   * - User-assigned: Only supports client ID-based identification (not object ID or resource ID)
+   *
+   * The request uses the 2017-09-01 API version and includes the required secret header
+   * for authentication with the MSI endpoint.
+   *
+   * @param resource - The target resource/scope for which to request an access token (e.g., "https://graph.microsoft.com/.default")
+   * @param managedIdentityId - The managed identity configuration specifying whether to use system-assigned or user-assigned identity
+   *
+   * @returns A configured ManagedIdentityRequestParameters object ready for network execution
+   *
+   * @throws Error if an unsupported managed identity ID type is specified (only client ID is supported for user-assigned)
+   */
   createRequest(resource, managedIdentityId) {
-    const request5 = new ManagedIdentityRequestParameters(HttpMethod.GET, this.msiEndpoint);
-    request5.headers[METADATA_HEADER_NAME] = "true";
-    request5.headers[ML_AND_SF_SECRET_HEADER_NAME] = this.secret;
-    request5.queryParameters[API_VERSION_QUERY_PARAMETER_NAME] = MACHINE_LEARNING_MSI_API_VERSION;
-    request5.queryParameters[RESOURCE_BODY_OR_QUERY_PARAMETER_NAME] = resource;
-    if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
+    const request5 = new ManagedIdentityRequestParameters(HttpMethod2.GET, this.msiEndpoint);
+    request5.headers[ManagedIdentityHeaders.METADATA_HEADER_NAME] = "true";
+    request5.headers[ManagedIdentityHeaders.ML_AND_SF_SECRET_HEADER_NAME] = this.secret;
+    request5.queryParameters[ManagedIdentityQueryParameters.API_VERSION] = MACHINE_LEARNING_MSI_API_VERSION;
+    request5.queryParameters[ManagedIdentityQueryParameters.RESOURCE] = resource;
+    if (managedIdentityId.idType === ManagedIdentityIdType.SYSTEM_ASSIGNED) {
+      request5.queryParameters[ManagedIdentityUserAssignedIdQueryParameterNames.MANAGED_IDENTITY_CLIENT_ID_2017] = process.env[ManagedIdentityEnvironmentVariableNames.DEFAULT_IDENTITY_CLIENT_ID];
+    } else if (managedIdentityId.idType === ManagedIdentityIdType.USER_ASSIGNED_CLIENT_ID) {
       request5.queryParameters[this.getManagedIdentityUserAssignedIdQueryParameterKey(
         managedIdentityId.idType,
         false,
@@ -41345,6 +42077,8 @@ var MachineLearning = class _MachineLearning extends BaseManagedIdentitySource {
         true
         // uses2017API
       )] = managedIdentityId.id;
+    } else {
+      throw new Error(MANAGED_IDENTITY_MACHINE_LEARNING_UNSUPPORTED_ID_TYPE_ERROR);
     }
     return request5;
   }
@@ -41392,12 +42126,13 @@ var ManagedIdentityClient = class _ManagedIdentityClient {
 };
 
 // node_modules/@azure/msal-node/dist/client/ManagedIdentityApplication.mjs
+var SOURCES_THAT_SUPPORT_TOKEN_REVOCATION = [ManagedIdentitySourceNames.SERVICE_FABRIC];
 var ManagedIdentityApplication = class _ManagedIdentityApplication {
   constructor(configuration) {
     this.config = buildManagedIdentityConfiguration(configuration || {});
     this.logger = new Logger(this.config.system.loggerOptions, name2, version2);
     const fakeStatusAuthorityOptions = {
-      canonicalAuthority: Constants.DEFAULT_AUTHORITY
+      canonicalAuthority: Constants_exports.DEFAULT_AUTHORITY
     };
     if (!_ManagedIdentityApplication.nodeStorage) {
       _ManagedIdentityApplication.nodeStorage = new NodeStorage(this.logger, this.config.managedIdentityId.id, DEFAULT_CRYPTO_IMPLEMENTATION, fakeStatusAuthorityOptions);
@@ -41418,7 +42153,7 @@ var ManagedIdentityApplication = class _ManagedIdentityApplication {
       this.logger,
       this.cryptoProvider.createNewGuid(),
       // correlationID
-      void 0,
+      new StubPerformanceClient(),
       true
     );
     this.fakeClientCredentialClient = new ClientCredentialClient({
@@ -41428,6 +42163,7 @@ var ManagedIdentityApplication = class _ManagedIdentityApplication {
       }
     });
     this.managedIdentityClient = new ManagedIdentityClient(this.logger, _ManagedIdentityApplication.nodeStorage, this.networkClient, this.cryptoProvider, this.config.disableInternalRetries);
+    this.hashUtils = new HashUtils();
   }
   /**
    * Acquire an access token from the cache or the managed identity
@@ -41445,22 +42181,44 @@ var ManagedIdentityApplication = class _ManagedIdentityApplication {
         managedIdentityRequestParams.resource.replace("/.default", "")
       ],
       authority: this.fakeAuthority.canonicalAuthority,
-      correlationId: this.cryptoProvider.createNewGuid()
+      correlationId: this.cryptoProvider.createNewGuid(),
+      claims: managedIdentityRequestParams.claims,
+      clientCapabilities: this.config.clientCapabilities
     };
-    if (managedIdentityRequestParams.claims || managedIdentityRequest.forceRefresh) {
-      return this.managedIdentityClient.sendManagedIdentityTokenRequest(managedIdentityRequest, this.config.managedIdentityId, this.fakeAuthority);
+    if (managedIdentityRequest.forceRefresh) {
+      return this.acquireTokenFromManagedIdentity(managedIdentityRequest, this.config.managedIdentityId, this.fakeAuthority);
     }
     const [cachedAuthenticationResult, lastCacheOutcome] = await this.fakeClientCredentialClient.getCachedAuthenticationResult(managedIdentityRequest, this.config, this.cryptoProvider, this.fakeAuthority, _ManagedIdentityApplication.nodeStorage);
+    if (managedIdentityRequest.claims) {
+      const sourceName = this.managedIdentityClient.getManagedIdentitySource();
+      if (cachedAuthenticationResult && SOURCES_THAT_SUPPORT_TOKEN_REVOCATION.includes(sourceName)) {
+        const revokedTokenSha256Hash = this.hashUtils.sha256(cachedAuthenticationResult.accessToken).toString(Constants_exports.EncodingTypes.HEX);
+        managedIdentityRequest.revokedTokenSha256Hash = revokedTokenSha256Hash;
+      }
+      return this.acquireTokenFromManagedIdentity(managedIdentityRequest, this.config.managedIdentityId, this.fakeAuthority);
+    }
     if (cachedAuthenticationResult) {
-      if (lastCacheOutcome === CacheOutcome.PROACTIVELY_REFRESHED) {
-        this.logger.info("ClientCredentialClient:getCachedAuthenticationResult - Cached access token's refreshOn property has been exceeded'. It's not expired, but must be refreshed.");
+      if (lastCacheOutcome === Constants_exports.CacheOutcome.PROACTIVELY_REFRESHED) {
+        this.logger.info("ClientCredentialClient:getCachedAuthenticationResult - Cached access token's refreshOn property has been exceeded'. It's not expired, but must be refreshed.", managedIdentityRequest.correlationId);
         const refreshAccessToken = true;
-        await this.managedIdentityClient.sendManagedIdentityTokenRequest(managedIdentityRequest, this.config.managedIdentityId, this.fakeAuthority, refreshAccessToken);
+        await this.acquireTokenFromManagedIdentity(managedIdentityRequest, this.config.managedIdentityId, this.fakeAuthority, refreshAccessToken);
       }
       return cachedAuthenticationResult;
     } else {
-      return this.managedIdentityClient.sendManagedIdentityTokenRequest(managedIdentityRequest, this.config.managedIdentityId, this.fakeAuthority);
+      return this.acquireTokenFromManagedIdentity(managedIdentityRequest, this.config.managedIdentityId, this.fakeAuthority);
     }
+  }
+  /**
+   * Acquires a token from a managed identity endpoint.
+   *
+   * @param managedIdentityRequest - The request object containing parameters for the managed identity token request.
+   * @param managedIdentityId - The identifier for the managed identity (e.g., client ID or resource ID).
+   * @param fakeAuthority - A placeholder authority used for the token request.
+   * @param refreshAccessToken - Optional flag indicating whether to force a refresh of the access token.
+   * @returns A promise that resolves to an AuthenticationResult containing the acquired token and related information.
+   */
+  async acquireTokenFromManagedIdentity(managedIdentityRequest, managedIdentityId, fakeAuthority, refreshAccessToken) {
+    return this.managedIdentityClient.sendManagedIdentityTokenRequest(managedIdentityRequest, managedIdentityId, fakeAuthority, refreshAccessToken);
   }
   /**
    * Determine the Managed Identity Source based on available environment variables. This API is consumed by Azure Identity SDK.
@@ -41493,7 +42251,7 @@ var DistributedCachePlugin = class {
   async afterCacheAccess(cacheContext) {
     if (cacheContext.cacheHasChanged) {
       const kvStore = cacheContext.tokenCache.getKVStore();
-      const accountEntities = Object.values(kvStore).filter((value) => AccountEntity.isAccountEntity(value));
+      const accountEntities = Object.values(kvStore).filter((value) => AccountEntityUtils_exports.isAccountEntity(value));
       let partitionKey;
       if (accountEntities.length > 0) {
         const accountEntity = accountEntities[0];
@@ -41505,6 +42263,10 @@ var DistributedCachePlugin = class {
     }
   }
 };
+
+// node_modules/@azure/msal-node/dist/index.mjs
+var PromptValue2 = Constants_exports.PromptValue;
+var ResponseMode2 = Constants_exports.ResponseMode;
 
 // node_modules/@azure/abort-controller/dist/esm/AbortError.js
 var AbortError = class extends Error {
@@ -43303,8 +44065,8 @@ function createPipelineFromOptions(options) {
 }
 
 // node_modules/@azure/core-rest-pipeline/dist/esm/nodeHttpClient.js
-var http3 = __toESM(require("http"), 1);
-var https2 = __toESM(require("https"), 1);
+var http2 = __toESM(require("http"), 1);
+var https = __toESM(require("https"), 1);
 var zlib = __toESM(require("zlib"), 1);
 var import_node_stream2 = require("stream");
 var DEFAULT_TLS_SETTINGS = {};
@@ -43469,7 +44231,7 @@ var NodeHttpClient = class {
       headers: request5.headers.toJSON({ preserveCase: true })
     };
     return new Promise((resolve, reject) => {
-      const req = isInsecure ? http3.request(options, resolve) : https2.request(options, resolve);
+      const req = isInsecure ? http2.request(options, resolve) : https.request(options, resolve);
       req.once("error", (err) => {
         var _a6;
         reject(new RestError(err.message, { code: (_a6 = err.code) !== null && _a6 !== void 0 ? _a6 : RestError.REQUEST_SEND_ERROR, request: request5 }));
@@ -43500,15 +44262,15 @@ var NodeHttpClient = class {
     const disableKeepAlive = request5.disableKeepAlive;
     if (isInsecure) {
       if (disableKeepAlive) {
-        return http3.globalAgent;
+        return http2.globalAgent;
       }
       if (!this.cachedHttpAgent) {
-        this.cachedHttpAgent = new http3.Agent({ keepAlive: true });
+        this.cachedHttpAgent = new http2.Agent({ keepAlive: true });
       }
       return this.cachedHttpAgent;
     } else {
       if (disableKeepAlive && !request5.tlsSettings) {
-        return https2.globalAgent;
+        return https.globalAgent;
       }
       const tlsSettings = (_a5 = request5.tlsSettings) !== null && _a5 !== void 0 ? _a5 : DEFAULT_TLS_SETTINGS;
       let agent = this.cachedHttpsAgents.get(tlsSettings);
@@ -43516,7 +44278,7 @@ var NodeHttpClient = class {
         return agent;
       }
       logger4.info("No cached TLS Agent exist, creating a new Agent");
-      agent = new https2.Agent(Object.assign({
+      agent = new https.Agent(Object.assign({
         // keepAlive is true if disableKeepAlive is false.
         keepAlive: !disableKeepAlive
       }, tlsSettings));
@@ -45165,9 +45927,9 @@ function createMsalClient(clientId, tenantId, createMsalClientOptions = {}) {
       claims: state3.cachedClaims
     };
     if (state3.pluginConfiguration.broker.isEnabled) {
-      silentRequest.tokenQueryParameters ||= {};
+      silentRequest.extraQueryParameters ||= {};
       if (state3.pluginConfiguration.broker.enableMsaPassthrough) {
-        silentRequest.tokenQueryParameters["msal_request_type"] = "consumer_passthrough";
+        silentRequest.extraQueryParameters["msal_request_type"] = "consumer_passthrough";
       }
     }
     if (options.proofOfPossessionOptions) {
@@ -45408,7 +46170,7 @@ function createMsalClient(clientId, tenantId, createMsalClientOptions = {}) {
       msalLogger.warning("Parent window handle is not specified for the broker. This may cause unexpected behavior. Please provide the parentWindowHandle.");
     }
     if (state3.pluginConfiguration.broker.enableMsaPassthrough) {
-      (interactiveRequest.tokenQueryParameters ??= {})["msal_request_type"] = "consumer_passthrough";
+      (interactiveRequest.extraQueryParameters ??= {})["msal_request_type"] = "consumer_passthrough";
     }
     if (useDefaultBrokerAccount) {
       interactiveRequest.prompt = "none";
@@ -47921,8 +48683,8 @@ function stringToUint8Array2(value, format) {
 }
 
 // node_modules/@typespec/ts-http-runtime/dist/esm/nodeHttpClient.js
-var http4 = __toESM(require("http"), 1);
-var https3 = __toESM(require("https"), 1);
+var http3 = __toESM(require("http"), 1);
+var https2 = __toESM(require("https"), 1);
 var zlib2 = __toESM(require("zlib"), 1);
 var import_node_stream3 = require("stream");
 
@@ -48091,7 +48853,7 @@ var NodeHttpClient2 = class {
     const agent = (_a5 = request5.agent) !== null && _a5 !== void 0 ? _a5 : this.getOrCreateAgent(request5, isInsecure);
     const options = Object.assign({ agent, hostname: url.hostname, path: `${url.pathname}${url.search}`, port: url.port, method: request5.method, headers: request5.headers.toJSON({ preserveCase: true }) }, request5.requestOverrides);
     return new Promise((resolve, reject) => {
-      const req = isInsecure ? http4.request(options, resolve) : https3.request(options, resolve);
+      const req = isInsecure ? http3.request(options, resolve) : https2.request(options, resolve);
       req.once("error", (err) => {
         var _a6;
         reject(new RestError2(err.message, { code: (_a6 = err.code) !== null && _a6 !== void 0 ? _a6 : RestError2.REQUEST_SEND_ERROR, request: request5 }));
@@ -48122,15 +48884,15 @@ var NodeHttpClient2 = class {
     const disableKeepAlive = request5.disableKeepAlive;
     if (isInsecure) {
       if (disableKeepAlive) {
-        return http4.globalAgent;
+        return http3.globalAgent;
       }
       if (!this.cachedHttpAgent) {
-        this.cachedHttpAgent = new http4.Agent({ keepAlive: true });
+        this.cachedHttpAgent = new http3.Agent({ keepAlive: true });
       }
       return this.cachedHttpAgent;
     } else {
       if (disableKeepAlive && !request5.tlsSettings) {
-        return https3.globalAgent;
+        return https2.globalAgent;
       }
       const tlsSettings = (_a5 = request5.tlsSettings) !== null && _a5 !== void 0 ? _a5 : DEFAULT_TLS_SETTINGS2;
       let agent = this.cachedHttpsAgents.get(tlsSettings);
@@ -48138,7 +48900,7 @@ var NodeHttpClient2 = class {
         return agent;
       }
       logger28.info("No cached TLS Agent exist, creating a new Agent");
-      agent = new https3.Agent(Object.assign({
+      agent = new https2.Agent(Object.assign({
         // keepAlive is true if disableKeepAlive is false.
         keepAlive: !disableKeepAlive
       }, tlsSettings));
@@ -52200,7 +52962,6 @@ safe-buffer/index.js:
 @azure/msal-node/dist/cache/serializer/Deserializer.mjs:
 @azure/msal-node/dist/internals.mjs:
 @azure/msal-node/dist/utils/Constants.mjs:
-@azure/msal-node/dist/utils/NetworkUtils.mjs:
 @azure/msal-node/dist/network/HttpClient.mjs:
 @azure/msal-node/dist/error/ManagedIdentityErrorCodes.mjs:
 @azure/msal-node/dist/error/ManagedIdentityError.mjs:
@@ -52212,10 +52973,13 @@ safe-buffer/index.js:
 @azure/msal-node/dist/crypto/HashUtils.mjs:
 @azure/msal-node/dist/crypto/PkceGenerator.mjs:
 @azure/msal-node/dist/crypto/CryptoProvider.mjs:
+@azure/msal-node/dist/cache/CacheHelpers.mjs:
 @azure/msal-node/dist/cache/NodeStorage.mjs:
 @azure/msal-node/dist/cache/TokenCache.mjs:
+@azure/msal-node/dist/error/ClientAuthErrorCodes.mjs:
 @azure/msal-node/dist/client/ClientAssertion.mjs:
 @azure/msal-node/dist/packageMetadata.mjs:
+@azure/msal-node/dist/client/BaseClient.mjs:
 @azure/msal-node/dist/client/UsernamePasswordClient.mjs:
 @azure/msal-node/dist/protocol/Authorize.mjs:
 @azure/msal-node/dist/client/ClientApplication.mjs:
@@ -52243,68 +53007,69 @@ safe-buffer/index.js:
 @azure/msal-node/dist/client/ManagedIdentityApplication.mjs:
 @azure/msal-node/dist/cache/distributed/DistributedCachePlugin.mjs:
 @azure/msal-node/dist/index.mjs:
-  (*! @azure/msal-node v3.5.1 2025-04-16 *)
+  (*! @azure/msal-node v5.1.1 2026-03-18 *)
 
 @azure/msal-common/dist/utils/Constants.mjs:
-@azure/msal-common/dist/error/AuthErrorCodes.mjs:
+@azure/msal-common/dist/constants/AADServerParamKeys.mjs:
 @azure/msal-common/dist/error/AuthError.mjs:
-@azure/msal-common/dist/error/ClientAuthErrorCodes.mjs:
+@azure/msal-common/dist/error/ClientConfigurationError.mjs:
+@azure/msal-common/dist/utils/StringUtils.mjs:
 @azure/msal-common/dist/error/ClientAuthError.mjs:
+@azure/msal-common/dist/error/ClientConfigurationErrorCodes.mjs:
+@azure/msal-common/dist/error/ClientAuthErrorCodes.mjs:
+@azure/msal-common/dist/request/ScopeSet.mjs:
+@azure/msal-common/dist/request/RequestParameterBuilder.mjs:
+@azure/msal-common/dist/utils/UrlUtils.mjs:
 @azure/msal-common/dist/crypto/ICrypto.mjs:
 @azure/msal-common/dist/logger/Logger.mjs:
 @azure/msal-common/dist/packageMetadata.mjs:
 @azure/msal-common/dist/authority/AuthorityOptions.mjs:
-@azure/msal-common/dist/account/AuthToken.mjs:
-@azure/msal-common/dist/utils/TimeUtils.mjs:
-@azure/msal-common/dist/cache/utils/CacheHelpers.mjs:
-@azure/msal-common/dist/error/ClientConfigurationErrorCodes.mjs:
-@azure/msal-common/dist/error/ClientConfigurationError.mjs:
-@azure/msal-common/dist/utils/StringUtils.mjs:
-@azure/msal-common/dist/request/ScopeSet.mjs:
-@azure/msal-common/dist/account/ClientInfo.mjs:
 @azure/msal-common/dist/account/AccountInfo.mjs:
-@azure/msal-common/dist/authority/AuthorityType.mjs:
-@azure/msal-common/dist/account/TokenClaims.mjs:
-@azure/msal-common/dist/authority/ProtocolMode.mjs:
-@azure/msal-common/dist/cache/entities/AccountEntity.mjs:
-@azure/msal-common/dist/utils/UrlUtils.mjs:
+@azure/msal-common/dist/account/AuthToken.mjs:
 @azure/msal-common/dist/url/UrlString.mjs:
 @azure/msal-common/dist/authority/AuthorityMetadata.mjs:
 @azure/msal-common/dist/error/CacheErrorCodes.mjs:
 @azure/msal-common/dist/error/CacheError.mjs:
+@azure/msal-common/dist/account/ClientInfo.mjs:
+@azure/msal-common/dist/authority/AuthorityType.mjs:
+@azure/msal-common/dist/account/TokenClaims.mjs:
+@azure/msal-common/dist/authority/ProtocolMode.mjs:
+@azure/msal-common/dist/cache/utils/AccountEntityUtils.mjs:
 @azure/msal-common/dist/cache/CacheManager.mjs:
-@azure/msal-common/dist/config/ClientConfiguration.mjs:
-@azure/msal-common/dist/account/CcsCredential.mjs:
-@azure/msal-common/dist/constants/AADServerParamKeys.mjs:
-@azure/msal-common/dist/request/RequestParameterBuilder.mjs:
-@azure/msal-common/dist/authority/OpenIdConfigResponse.mjs:
-@azure/msal-common/dist/authority/CloudInstanceDiscoveryResponse.mjs:
-@azure/msal-common/dist/authority/CloudInstanceDiscoveryErrorResponse.mjs:
 @azure/msal-common/dist/telemetry/performance/PerformanceEvent.mjs:
-@azure/msal-common/dist/utils/FunctionWrappers.mjs:
-@azure/msal-common/dist/authority/RegionDiscovery.mjs:
-@azure/msal-common/dist/authority/Authority.mjs:
-@azure/msal-common/dist/authority/AuthorityFactory.mjs:
+@azure/msal-common/dist/telemetry/performance/StubPerformanceClient.mjs:
+@azure/msal-common/dist/config/ClientConfiguration.mjs:
 @azure/msal-common/dist/error/ServerError.mjs:
-@azure/msal-common/dist/network/RequestThumbprint.mjs:
-@azure/msal-common/dist/network/ThrottlingUtils.mjs:
-@azure/msal-common/dist/error/NetworkError.mjs:
-@azure/msal-common/dist/client/BaseClient.mjs:
 @azure/msal-common/dist/error/InteractionRequiredAuthErrorCodes.mjs:
 @azure/msal-common/dist/error/InteractionRequiredAuthError.mjs:
 @azure/msal-common/dist/utils/ProtocolUtils.mjs:
+@azure/msal-common/dist/utils/TimeUtils.mjs:
+@azure/msal-common/dist/telemetry/performance/PerformanceEvents.mjs:
+@azure/msal-common/dist/utils/FunctionWrappers.mjs:
 @azure/msal-common/dist/crypto/PopTokenGenerator.mjs:
 @azure/msal-common/dist/cache/persistence/TokenCacheContext.mjs:
+@azure/msal-common/dist/cache/utils/CacheHelpers.mjs:
 @azure/msal-common/dist/response/ResponseHandler.mjs:
-@azure/msal-common/dist/request/RequestValidator.mjs:
+@azure/msal-common/dist/account/CcsCredential.mjs:
 @azure/msal-common/dist/utils/ClientAssertionUtils.mjs:
+@azure/msal-common/dist/network/RequestThumbprint.mjs:
+@azure/msal-common/dist/network/ThrottlingUtils.mjs:
+@azure/msal-common/dist/error/NetworkError.mjs:
+@azure/msal-common/dist/protocol/Token.mjs:
+@azure/msal-common/dist/authority/OpenIdConfigResponse.mjs:
+@azure/msal-common/dist/authority/CloudInstanceDiscoveryResponse.mjs:
+@azure/msal-common/dist/authority/CloudInstanceDiscoveryErrorResponse.mjs:
+@azure/msal-common/dist/authority/RegionDiscovery.mjs:
+@azure/msal-common/dist/authority/Authority.mjs:
+@azure/msal-common/dist/authority/AuthorityFactory.mjs:
 @azure/msal-common/dist/client/AuthorizationCodeClient.mjs:
 @azure/msal-common/dist/client/RefreshTokenClient.mjs:
 @azure/msal-common/dist/client/SilentFlowClient.mjs:
 @azure/msal-common/dist/protocol/Authorize.mjs:
+@azure/msal-common/dist/request/BaseAuthRequest.mjs:
+@azure/msal-common/dist/error/AuthErrorCodes.mjs:
 @azure/msal-common/dist/telemetry/server/ServerTelemetryManager.mjs:
 @azure/msal-common/dist/index-node.mjs:
-@azure/msal-common/dist/index.mjs:
-  (*! @azure/msal-common v15.5.1 2025-04-15 *)
+  (*! @azure/msal-common v16.4.0 2026-03-18 *)
 */
 //# sourceMappingURL=index.js.map

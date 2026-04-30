@@ -67,7 +67,17 @@
       "node_modules/(?!@actions/)"
     ],
     "transform": {
-      "^.+\\.ts$": "ts-jest",
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "diagnostics": {
+            "ignoreCodes": [
+              151002
+            ]
+          },
+          "jestGlobals": true
+        }
+      ],
       "^.+\\.js$": [
         "babel-jest",
         {
@@ -123,7 +133,7 @@
     "ts-jest": "^29.4.9",
     "ts-node": "^10.9.2",
     "tsup": "^8.5.0",
-    "typescript": "^5.9.3",
+    "typescript": "^6.0.3",
     "uglify-js": "^3.19.3"
   },
   "overrides": {
