@@ -1268,7 +1268,7 @@ var require_util = __commonJS({
     var { IncomingMessage } = require("http");
     var stream = require("stream");
     var net = require("net");
-    var { stringify: stringify2 } = require("querystring");
+    var { stringify } = require("querystring");
     var { EventEmitter: EE } = require("events");
     var timers = require_timers();
     var { InvalidArgumentError, ConnectTimeoutError } = require_errors();
@@ -1334,7 +1334,7 @@ var require_util = __commonJS({
       if (pathHasQueryOrFragment(url)) {
         throw new Error('Query params cannot be passed when url already contains "?" or "#".');
       }
-      const stringified = stringify2(queryParams);
+      const stringified = stringify(queryParams);
       if (stringified) {
         url += "?" + stringified;
       }
@@ -13662,8 +13662,8 @@ var require_snapshot_utils = __commonJS({
         match: new Set(matchHeaders.map((header) => caseSensitive ? header : header.toLowerCase()))
       };
     }
-    var crypto5 = runtimeFeatures.has("crypto") ? require("crypto") : null;
-    var hashId = crypto5?.hash ? (value) => crypto5.hash("sha256", value, "base64url") : (value) => Buffer.from(value).toString("base64url");
+    var crypto4 = runtimeFeatures.has("crypto") ? require("crypto") : null;
+    var hashId = crypto4?.hash ? (value) => crypto4.hash("sha256", value, "base64url") : (value) => Buffer.from(value).toString("base64url");
     function isUndiciHeaders(headers) {
       return Array.isArray(headers) && (headers.length & 1) === 0;
     }
@@ -19714,10 +19714,10 @@ var require_subresource_integrity = __commonJS({
     var assert = require("assert");
     var { runtimeFeatures } = require_runtime_features();
     var validSRIHashAlgorithmTokenSet = /* @__PURE__ */ new Map([["sha256", 0], ["sha384", 1], ["sha512", 2]]);
-    var crypto5;
+    var crypto4;
     if (runtimeFeatures.has("crypto")) {
-      crypto5 = require("crypto");
-      const cryptoHashes = crypto5.getHashes();
+      crypto4 = require("crypto");
+      const cryptoHashes = crypto4.getHashes();
       if (cryptoHashes.length === 0) {
         validSRIHashAlgorithmTokenSet.clear();
       }
@@ -19807,7 +19807,7 @@ var require_subresource_integrity = __commonJS({
       return result;
     }
     var applyAlgorithmToBytes = (algorithm, bytes) => {
-      return crypto5.hash(algorithm, bytes, "base64");
+      return crypto4.hash(algorithm, bytes, "base64");
     };
     function caseSensitiveMatch(actualValue, expectedValue) {
       let actualValueLength = actualValue.length;
@@ -21785,7 +21785,7 @@ var require_util4 = __commonJS({
         throw new Error("Invalid cookie max-age");
       }
     }
-    function stringify2(cookie) {
+    function stringify(cookie) {
       if (cookie.name.length === 0) {
         return null;
       }
@@ -21839,7 +21839,7 @@ var require_util4 = __commonJS({
       validateCookiePath,
       validateCookieValue,
       toIMFDate,
-      stringify: stringify2
+      stringify
     };
   }
 });
@@ -21990,7 +21990,7 @@ var require_cookies = __commonJS({
   "node_modules/undici/lib/web/cookies/index.js"(exports2, module2) {
     "use strict";
     var { parseSetCookie } = require_parse();
-    var { stringify: stringify2 } = require_util4();
+    var { stringify } = require_util4();
     var { webidl } = require_webidl();
     var { Headers: Headers3 } = require_headers();
     var brandChecks = webidl.brandCheckMultiple([Headers3, globalThis.Headers].filter(Boolean));
@@ -22038,7 +22038,7 @@ var require_cookies = __commonJS({
       webidl.argumentLengthCheck(arguments, 2, "setCookie");
       brandChecks(headers);
       cookie = webidl.converters.Cookie(cookie);
-      const str = stringify2(cookie);
+      const str = stringify(cookie);
       if (str) {
         headers.append("set-cookie", str, true);
       }
@@ -22739,7 +22739,7 @@ var require_connection = __commonJS({
     var { WebsocketFrameSend } = require_frame();
     var assert = require("assert");
     var { runtimeFeatures } = require_runtime_features();
-    var crypto5 = runtimeFeatures.has("crypto") ? require("crypto") : null;
+    var crypto4 = runtimeFeatures.has("crypto") ? require("crypto") : null;
     var warningEmitted = false;
     function establishWebSocketConnection(url, protocols, client, handler, options) {
       const requestURL = url;
@@ -22759,7 +22759,7 @@ var require_connection = __commonJS({
         const headersList = getHeadersList(new Headers3(options.headers));
         request5.headersList = headersList;
       }
-      const keyValue = crypto5.randomBytes(16).toString("base64");
+      const keyValue = crypto4.randomBytes(16).toString("base64");
       request5.headersList.append("sec-websocket-key", keyValue, true);
       request5.headersList.append("sec-websocket-version", "13", true);
       for (const protocol of protocols) {
@@ -22799,7 +22799,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto5.hash("sha1", keyValue + uid, "base64");
+          const digest = crypto4.hash("sha1", keyValue + uid, "base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(handler, 1002, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -22830,10 +22830,10 @@ var require_connection = __commonJS({
       });
       return controller;
     }
-    function closeWebSocketConnection(object, code, reason, validate2 = false) {
+    function closeWebSocketConnection(object, code, reason, validate = false) {
       code ??= null;
       reason ??= "";
-      if (validate2) validateCloseCodeAndReason(code, reason);
+      if (validate) validateCloseCodeAndReason(code, reason);
       if (isClosed(object.readyState) || isClosing(object.readyState)) {
       } else if (!isEstablished(object.readyState)) {
         failWebsocketConnection(object);
@@ -25360,14 +25360,14 @@ var require_jwa = __commonJS({
   "node_modules/jwa/index.js"(exports2, module2) {
     "use strict";
     var Buffer3 = require_safe_buffer().Buffer;
-    var crypto5 = require("crypto");
+    var crypto4 = require("crypto");
     var formatEcdsa = require_ecdsa_sig_formatter();
     var util3 = require("util");
     var MSG_INVALID_ALGORITHM = '"%s" is not a valid algorithm.\n  Supported algorithms are:\n  "HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512" and "none".';
     var MSG_INVALID_SECRET = "secret must be a string or buffer";
     var MSG_INVALID_VERIFIER_KEY = "key must be a string or a buffer";
     var MSG_INVALID_SIGNER_KEY = "key must be a string, a buffer or an object";
-    var supportsKeyObjects = typeof crypto5.createPublicKey === "function";
+    var supportsKeyObjects = typeof crypto4.createPublicKey === "function";
     if (supportsKeyObjects) {
       MSG_INVALID_VERIFIER_KEY += " or a KeyObject";
       MSG_INVALID_SECRET += "or a KeyObject";
@@ -25457,17 +25457,17 @@ var require_jwa = __commonJS({
       return function sign(thing, secret) {
         checkIsSecretKey(secret);
         thing = normalizeInput(thing);
-        var hmac = crypto5.createHmac("sha" + bits, secret);
+        var hmac = crypto4.createHmac("sha" + bits, secret);
         var sig = (hmac.update(thing), hmac.digest("base64"));
         return fromBase64(sig);
       };
     }
     var bufferEqual;
-    var timingSafeEqual = "timingSafeEqual" in crypto5 ? function timingSafeEqual2(a, b) {
+    var timingSafeEqual = "timingSafeEqual" in crypto4 ? function timingSafeEqual2(a, b) {
       if (a.byteLength !== b.byteLength) {
         return false;
       }
-      return crypto5.timingSafeEqual(a, b);
+      return crypto4.timingSafeEqual(a, b);
     } : function timingSafeEqual2(a, b) {
       if (!bufferEqual) {
         bufferEqual = require_buffer_equal_constant_time();
@@ -25484,7 +25484,7 @@ var require_jwa = __commonJS({
       return function sign(thing, privateKey) {
         checkIsPrivateKey(privateKey);
         thing = normalizeInput(thing);
-        var signer = crypto5.createSign("RSA-SHA" + bits);
+        var signer = crypto4.createSign("RSA-SHA" + bits);
         var sig = (signer.update(thing), signer.sign(privateKey, "base64"));
         return fromBase64(sig);
       };
@@ -25494,7 +25494,7 @@ var require_jwa = __commonJS({
         checkIsPublicKey(publicKey);
         thing = normalizeInput(thing);
         signature = toBase64(signature);
-        var verifier = crypto5.createVerify("RSA-SHA" + bits);
+        var verifier = crypto4.createVerify("RSA-SHA" + bits);
         verifier.update(thing);
         return verifier.verify(publicKey, signature, "base64");
       };
@@ -25503,11 +25503,11 @@ var require_jwa = __commonJS({
       return function sign(thing, privateKey) {
         checkIsPrivateKey(privateKey);
         thing = normalizeInput(thing);
-        var signer = crypto5.createSign("RSA-SHA" + bits);
+        var signer = crypto4.createSign("RSA-SHA" + bits);
         var sig = (signer.update(thing), signer.sign({
           key: privateKey,
-          padding: crypto5.constants.RSA_PKCS1_PSS_PADDING,
-          saltLength: crypto5.constants.RSA_PSS_SALTLEN_DIGEST
+          padding: crypto4.constants.RSA_PKCS1_PSS_PADDING,
+          saltLength: crypto4.constants.RSA_PSS_SALTLEN_DIGEST
         }, "base64"));
         return fromBase64(sig);
       };
@@ -25517,12 +25517,12 @@ var require_jwa = __commonJS({
         checkIsPublicKey(publicKey);
         thing = normalizeInput(thing);
         signature = toBase64(signature);
-        var verifier = crypto5.createVerify("RSA-SHA" + bits);
+        var verifier = crypto4.createVerify("RSA-SHA" + bits);
         verifier.update(thing);
         return verifier.verify({
           key: publicKey,
-          padding: crypto5.constants.RSA_PKCS1_PSS_PADDING,
-          saltLength: crypto5.constants.RSA_PSS_SALTLEN_DIGEST
+          padding: crypto4.constants.RSA_PKCS1_PSS_PADDING,
+          saltLength: crypto4.constants.RSA_PSS_SALTLEN_DIGEST
         }, signature, "base64");
       };
     }
@@ -28747,7 +28747,7 @@ var require_sign = __commonJS({
       exp: { isValid: isNumber, message: '"exp" should be a number of seconds' },
       nbf: { isValid: isNumber, message: '"nbf" should be a number of seconds' }
     };
-    function validate2(schema, allowUnknown, object, parameterName) {
+    function validate(schema, allowUnknown, object, parameterName) {
       if (!isPlainObject(object)) {
         throw new Error('Expected "' + parameterName + '" to be a plain object.');
       }
@@ -28765,10 +28765,10 @@ var require_sign = __commonJS({
       });
     }
     function validateOptions(options) {
-      return validate2(sign_options_schema, false, options, "options");
+      return validate(sign_options_schema, false, options, "options");
     }
     function validatePayload(payload) {
-      return validate2(registered_claims_schema, true, payload, "payload");
+      return validate(registered_claims_schema, true, payload, "payload");
     }
     var options_to_payload = {
       "audience": "aud",
@@ -31567,9 +31567,9 @@ function setLogLevel(level) {
   }
   azureLogLevel = level;
   const enabledNamespaces3 = [];
-  for (const logger31 of registeredLoggers) {
-    if (shouldEnable(logger31)) {
-      enabledNamespaces3.push(logger31.namespace);
+  for (const logger30 of registeredLoggers) {
+    if (shouldEnable(logger30)) {
+      enabledNamespaces3.push(logger30.namespace);
     }
   }
   debug_default.enable(enabledNamespaces3.join(","));
@@ -31599,19 +31599,19 @@ function patchLogMethod(parent, child) {
   };
 }
 function createLogger(parent, level) {
-  const logger31 = Object.assign(parent.extend(level), {
+  const logger30 = Object.assign(parent.extend(level), {
     level
   });
-  patchLogMethod(parent, logger31);
-  if (shouldEnable(logger31)) {
+  patchLogMethod(parent, logger30);
+  if (shouldEnable(logger30)) {
     const enabledNamespaces3 = debug_default.disable();
-    debug_default.enable(enabledNamespaces3 + "," + logger31.namespace);
+    debug_default.enable(enabledNamespaces3 + "," + logger30.namespace);
   }
-  registeredLoggers.add(logger31);
-  return logger31;
+  registeredLoggers.add(logger30);
+  return logger30;
 }
-function shouldEnable(logger31) {
-  return Boolean(azureLogLevel && levelMap[logger31.level] <= levelMap[azureLogLevel]);
+function shouldEnable(logger30) {
+  return Boolean(azureLogLevel && levelMap[logger30.level] <= levelMap[azureLogLevel]);
 }
 function isAzureLogLevel(logLevel) {
   return AZURE_LOG_LEVELS.includes(logLevel);
@@ -32058,7 +32058,7 @@ var Serializer = class {
   }
 };
 
-// node_modules/@azure/msal-common/dist/request/RequestParameterBuilder.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/request/RequestParameterBuilder.mjs
 var RequestParameterBuilder_exports = {};
 __export(RequestParameterBuilder_exports, {
   addApplicationTelemetry: () => addApplicationTelemetry,
@@ -32110,7 +32110,7 @@ __export(RequestParameterBuilder_exports, {
   instrumentBrokerParams: () => instrumentBrokerParams
 });
 
-// node_modules/@azure/msal-common/dist/utils/Constants.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/Constants.mjs
 var Constants_exports = {};
 __export(Constants_exports, {
   AADAuthority: () => AADAuthority,
@@ -32429,7 +32429,7 @@ var EncodingTypes = {
   UTF8: "utf-8"
 };
 
-// node_modules/@azure/msal-common/dist/constants/AADServerParamKeys.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/constants/AADServerParamKeys.mjs
 var AADServerParamKeys_exports = {};
 __export(AADServerParamKeys_exports, {
   ACCESS_TOKEN: () => ACCESS_TOKEN,
@@ -32554,7 +32554,7 @@ var EAR_JWE_CRYPTO = "ear_jwe_crypto";
 var RESOURCE = "resource";
 var CLI_DATA = "clidata";
 
-// node_modules/@azure/msal-common/dist/error/AuthError.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/AuthError.mjs
 function getDefaultErrorMessage(code) {
   return `See https://aka.ms/msal.js.errors#${code} for details`;
 }
@@ -32577,7 +32577,7 @@ function createAuthError(code, additionalMessage) {
   return new AuthError(code, additionalMessage || getDefaultErrorMessage(code));
 }
 
-// node_modules/@azure/msal-common/dist/error/ClientConfigurationError.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ClientConfigurationError.mjs
 var ClientConfigurationError = class _ClientConfigurationError extends AuthError {
   constructor(errorCode) {
     super(errorCode);
@@ -32589,7 +32589,7 @@ function createClientConfigurationError(errorCode) {
   return new ClientConfigurationError(errorCode);
 }
 
-// node_modules/@azure/msal-common/dist/utils/StringUtils.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/StringUtils.mjs
 var StringUtils = class {
   /**
    * Check if stringified object is empty
@@ -32660,7 +32660,7 @@ var StringUtils = class {
   }
 };
 
-// node_modules/@azure/msal-common/dist/error/ClientAuthError.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ClientAuthError.mjs
 var ClientAuthError = class _ClientAuthError extends AuthError {
   constructor(errorCode, additionalMessage) {
     super(errorCode, additionalMessage);
@@ -32672,7 +32672,7 @@ function createClientAuthError(errorCode, additionalMessage) {
   return new ClientAuthError(errorCode, additionalMessage);
 }
 
-// node_modules/@azure/msal-common/dist/error/ClientConfigurationErrorCodes.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ClientConfigurationErrorCodes.mjs
 var ClientConfigurationErrorCodes_exports = {};
 __export(ClientConfigurationErrorCodes_exports, {
   authorityMismatch: () => authorityMismatch,
@@ -32721,7 +32721,7 @@ var cannotAllowPlatformBroker = "cannot_allow_platform_broker";
 var authorityMismatch = "authority_mismatch";
 var invalidRequestMethodForEAR = "invalid_request_method_for_EAR";
 
-// node_modules/@azure/msal-common/dist/error/ClientAuthErrorCodes.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ClientAuthErrorCodes.mjs
 var ClientAuthErrorCodes_exports = {};
 __export(ClientAuthErrorCodes_exports, {
   authTimeNotFound: () => authTimeNotFound,
@@ -32804,7 +32804,7 @@ var platformBrokerError = "platform_broker_error";
 var resourceParameterRequired = "resource_parameter_required";
 var misplacedResourceParam = "misplaced_resource_parameter";
 
-// node_modules/@azure/msal-common/dist/request/ScopeSet.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/request/ScopeSet.mjs
 var ScopeSet = class _ScopeSet {
   constructor(inputScopes) {
     const scopeArr = inputScopes ? StringUtils.trimArrayEntries([...inputScopes]) : [];
@@ -32973,7 +32973,7 @@ var ScopeSet = class _ScopeSet {
   }
 };
 
-// node_modules/@azure/msal-common/dist/request/RequestParameterBuilder.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/request/RequestParameterBuilder.mjs
 function instrumentBrokerParams(parameters, correlationId, performanceClient) {
   if (!correlationId) {
     return;
@@ -33030,14 +33030,17 @@ function addCcsOid(parameters, clientInfo) {
 function addSid(parameters, sid) {
   parameters.set(SID, sid);
 }
-function addClaims(parameters, claims, clientCapabilities) {
-  const mergedClaims = addClientCapabilitiesToClaims(claims, clientCapabilities);
-  try {
-    JSON.parse(mergedClaims);
-  } catch (e) {
-    throw createClientConfigurationError(invalidClaims);
+function addClaims(parameters, claims, clientCapabilities, skipBrokerClaims) {
+  const configClaims = skipBrokerClaims && parameters.has(BROKER_CLIENT_ID) ? void 0 : clientCapabilities;
+  if (!StringUtils.isEmptyObj(claims) || configClaims && configClaims.length > 0) {
+    const mergedClaims = addClientCapabilitiesToClaims(claims, configClaims);
+    try {
+      JSON.parse(mergedClaims);
+    } catch (e) {
+      throw createClientConfigurationError(invalidClaims);
+    }
+    parameters.set(CLAIMS, mergedClaims);
   }
-  parameters.set(CLAIMS, mergedClaims);
 }
 function addCorrelationId(parameters, correlationId) {
   parameters.set(CLIENT_REQUEST_ID, correlationId);
@@ -33199,7 +33202,7 @@ function addResource(parameters, resource) {
   }
 }
 
-// node_modules/@azure/msal-common/dist/utils/UrlUtils.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/UrlUtils.mjs
 var UrlUtils_exports = {};
 __export(UrlUtils_exports, {
   getDeserializedResponse: () => getDeserializedResponse,
@@ -33266,7 +33269,7 @@ function normalizeUrlForComparison(url) {
   }
 }
 
-// node_modules/@azure/msal-common/dist/crypto/ICrypto.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/crypto/ICrypto.mjs
 var DEFAULT_CRYPTO_IMPLEMENTATION = {
   createNewGuid: () => {
     throw createClientAuthError(methodNotImplemented);
@@ -33300,7 +33303,7 @@ var DEFAULT_CRYPTO_IMPLEMENTATION = {
   }
 };
 
-// node_modules/@azure/msal-common/dist/logger/Logger.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/logger/Logger.mjs
 var LogLevel;
 (function(LogLevel2) {
   LogLevel2[LogLevel2["Error"] = 0] = "Error";
@@ -33523,11 +33526,11 @@ var Logger = class _Logger {
   }
 };
 
-// node_modules/@azure/msal-common/dist/packageMetadata.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/packageMetadata.mjs
 var name = "@azure/msal-common";
-var version = "16.4.0";
+var version = "16.5.2";
 
-// node_modules/@azure/msal-common/dist/authority/AuthorityOptions.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityOptions.mjs
 var AzureCloudInstance = {
   // AzureCloudInstance is not specified.
   None: "none",
@@ -33543,7 +33546,7 @@ var AzureCloudInstance = {
   AzureUsGovernment: "https://login.microsoftonline.us"
 };
 
-// node_modules/@azure/msal-common/dist/account/AccountInfo.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/AccountInfo.mjs
 function tenantIdMatchesHomeTenant(tenantId, homeAccountId) {
   return !!tenantId && !!homeAccountId && tenantId === homeAccountId.split(".")[1];
 }
@@ -33557,7 +33560,8 @@ function buildTenantProfile(homeAccountId, localAccountId, tenantId, idTokenClai
       name: name3,
       username: preferred_username || upn || "",
       loginHint: login_hint,
-      isHomeTenant: tenantIdMatchesHomeTenant(tenantId2, homeAccountId)
+      isHomeTenant: tenantIdMatchesHomeTenant(tenantId2, homeAccountId),
+      upn
     };
   } else {
     return {
@@ -33587,7 +33591,7 @@ function updateAccountTenantProfileData(baseAccountInfo, tenantProfile, idTokenC
   return updatedAccountInfo;
 }
 
-// node_modules/@azure/msal-common/dist/account/AuthToken.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/AuthToken.mjs
 var AuthToken_exports = {};
 __export(AuthToken_exports, {
   checkMaxAge: () => checkMaxAge,
@@ -33629,7 +33633,7 @@ function checkMaxAge(authTime, maxAge) {
   }
 }
 
-// node_modules/@azure/msal-common/dist/url/UrlString.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/url/UrlString.mjs
 var UrlString = class _UrlString {
   get urlString() {
     return this._urlString;
@@ -33755,7 +33759,7 @@ var UrlString = class _UrlString {
   }
 };
 
-// node_modules/@azure/msal-common/dist/authority/AuthorityMetadata.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityMetadata.mjs
 var endpointHosts = [
   { host: "login.microsoftonline.com" },
   {
@@ -33847,24 +33851,24 @@ InstanceDiscoveryMetadata.metadata.forEach((metadataEntry) => {
     InstanceDiscoveryMetadataAliases.add(alias);
   });
 });
-function getAliasesFromStaticSources(staticAuthorityOptions, logger31, correlationId) {
+function getAliasesFromStaticSources(staticAuthorityOptions, logger30, correlationId) {
   let staticAliases;
   const canonicalAuthority = staticAuthorityOptions.canonicalAuthority;
   if (canonicalAuthority) {
     const authorityHost = new UrlString(canonicalAuthority).getUrlComponents().HostNameAndPort;
-    staticAliases = getAliasesFromMetadata(logger31, correlationId, authorityHost, staticAuthorityOptions.cloudDiscoveryMetadata?.metadata, AuthorityMetadataSource.CONFIG) || getAliasesFromMetadata(logger31, correlationId, authorityHost, InstanceDiscoveryMetadata.metadata, AuthorityMetadataSource.HARDCODED_VALUES) || staticAuthorityOptions.knownAuthorities;
+    staticAliases = getAliasesFromMetadata(logger30, correlationId, authorityHost, staticAuthorityOptions.cloudDiscoveryMetadata?.metadata, AuthorityMetadataSource.CONFIG) || getAliasesFromMetadata(logger30, correlationId, authorityHost, InstanceDiscoveryMetadata.metadata, AuthorityMetadataSource.HARDCODED_VALUES) || staticAuthorityOptions.knownAuthorities;
   }
   return staticAliases || [];
 }
-function getAliasesFromMetadata(logger31, correlationId, authorityHost, cloudDiscoveryMetadata, source) {
-  logger31.trace(`getAliasesFromMetadata called with source: '${source}'`, correlationId);
+function getAliasesFromMetadata(logger30, correlationId, authorityHost, cloudDiscoveryMetadata, source) {
+  logger30.trace(`getAliasesFromMetadata called with source: '${source}'`, correlationId);
   if (authorityHost && cloudDiscoveryMetadata) {
     const metadata = getCloudDiscoveryMetadataFromNetworkResponse(cloudDiscoveryMetadata, authorityHost);
     if (metadata) {
-      logger31.trace(`getAliasesFromMetadata: found cloud discovery metadata in '${source}', returning aliases`, correlationId);
+      logger30.trace(`getAliasesFromMetadata: found cloud discovery metadata in '${source}', returning aliases`, correlationId);
       return metadata.aliases;
     } else {
-      logger31.trace(`getAliasesFromMetadata: did not find cloud discovery metadata in '${source}'`, correlationId);
+      logger30.trace(`getAliasesFromMetadata: did not find cloud discovery metadata in '${source}'`, correlationId);
     }
   }
   return null;
@@ -33883,11 +33887,11 @@ function getCloudDiscoveryMetadataFromNetworkResponse(response, authorityHost) {
   return null;
 }
 
-// node_modules/@azure/msal-common/dist/error/CacheErrorCodes.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/CacheErrorCodes.mjs
 var cacheQuotaExceeded = "cache_quota_exceeded";
 var cacheErrorUnknown = "cache_error_unknown";
 
-// node_modules/@azure/msal-common/dist/error/CacheError.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/CacheError.mjs
 var CacheError = class _CacheError extends Error {
   constructor(errorCode, errorMessage) {
     const message = errorMessage || getDefaultErrorMessage(errorCode);
@@ -33909,7 +33913,7 @@ function createCacheError(e) {
   }
 }
 
-// node_modules/@azure/msal-common/dist/cache/utils/AccountEntityUtils.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/utils/AccountEntityUtils.mjs
 var AccountEntityUtils_exports = {};
 __export(AccountEntityUtils_exports, {
   createAccountEntity: () => createAccountEntity,
@@ -33921,7 +33925,7 @@ __export(AccountEntityUtils_exports, {
   isSingleTenant: () => isSingleTenant
 });
 
-// node_modules/@azure/msal-common/dist/account/ClientInfo.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/ClientInfo.mjs
 function buildClientInfo(rawClientInfo, base64Decode) {
   if (!rawClientInfo) {
     throw createClientAuthError(clientInfoEmptyError);
@@ -33944,7 +33948,7 @@ function buildClientInfoFromHomeAccountId(homeAccountId) {
   };
 }
 
-// node_modules/@azure/msal-common/dist/authority/AuthorityType.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityType.mjs
 var AuthorityType = {
   Default: 0,
   Adfs: 1,
@@ -33952,7 +33956,7 @@ var AuthorityType = {
   Ciam: 3
 };
 
-// node_modules/@azure/msal-common/dist/account/TokenClaims.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/TokenClaims.mjs
 function getTenantIdFromIdTokenClaims(idTokenClaims) {
   if (idTokenClaims) {
     const tenantId = idTokenClaims.tid || idTokenClaims.tfp || idTokenClaims.acr;
@@ -33961,7 +33965,7 @@ function getTenantIdFromIdTokenClaims(idTokenClaims) {
   return null;
 }
 
-// node_modules/@azure/msal-common/dist/authority/ProtocolMode.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/ProtocolMode.mjs
 var ProtocolMode = {
   /**
    * Auth Code + PKCE with Entra ID (formerly AAD) specific optimizations and features
@@ -33978,7 +33982,7 @@ var ProtocolMode = {
   EAR: "EAR"
 };
 
-// node_modules/@azure/msal-common/dist/cache/utils/AccountEntityUtils.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/utils/AccountEntityUtils.mjs
 function generateAccountId(accountEntity) {
   const accountId = [
     accountEntity.homeAccountId,
@@ -34085,7 +34089,7 @@ function createAccountEntityFromAccountInfo(accountInfo, cloudGraphHostName, msG
     dataBoundary: accountInfo.dataBoundary
   };
 }
-function generateHomeAccountId(serverClientInfo, authType, logger31, cryptoObj, correlationId, idTokenClaims) {
+function generateHomeAccountId(serverClientInfo, authType, logger30, cryptoObj, correlationId, idTokenClaims) {
   if (!(authType === AuthorityType.Adfs || authType === AuthorityType.Dsts)) {
     if (serverClientInfo) {
       try {
@@ -34096,7 +34100,7 @@ function generateHomeAccountId(serverClientInfo, authType, logger31, cryptoObj, 
       } catch (e) {
       }
     }
-    logger31.warning("No client info in response", correlationId);
+    logger30.warning("No client info in response", correlationId);
   }
   return idTokenClaims?.sub || "";
 }
@@ -34107,12 +34111,12 @@ function isAccountEntity(entity) {
   return entity.hasOwnProperty("homeAccountId") && entity.hasOwnProperty("environment") && entity.hasOwnProperty("realm") && entity.hasOwnProperty("localAccountId") && entity.hasOwnProperty("username") && entity.hasOwnProperty("authorityType");
 }
 
-// node_modules/@azure/msal-common/dist/cache/CacheManager.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/CacheManager.mjs
 var CacheManager = class {
-  constructor(clientId, cryptoImpl, logger31, performanceClient, staticAuthorityOptions) {
+  constructor(clientId, cryptoImpl, logger30, performanceClient, staticAuthorityOptions) {
     this.clientId = clientId;
     this.cryptoImpl = cryptoImpl;
-    this.commonLogger = logger31.clone(name, version);
+    this.commonLogger = logger30.clone(name, version);
     this.staticAuthorityOptions = staticAuthorityOptions;
     this.performanceClient = performanceClient;
   }
@@ -34134,8 +34138,10 @@ var CacheManager = class {
     }
     const allAccounts = this.getAllAccounts(accountFilter, correlationId);
     if (allAccounts.length > 1) {
-      const sortedAccounts = allAccounts.sort((account) => {
-        return account.idTokenClaims ? -1 : 1;
+      const sortedAccounts = allAccounts.sort((a, b) => {
+        const aHasClaims = a.idTokenClaims ? 1 : 0;
+        const bHasClaims = b.idTokenClaims ? 1 : 0;
+        return bHasClaims - aHasClaims;
       });
       return sortedAccounts[0];
     } else if (allAccounts.length === 1) {
@@ -34220,6 +34226,15 @@ var CacheManager = class {
     if (tenantProfileFilter.isHomeTenant !== void 0 && !(tenantProfile.isHomeTenant === tenantProfileFilter.isHomeTenant)) {
       return false;
     }
+    if (!!tenantProfileFilter.username && !(this.matchUsername(tenantProfile.username, tenantProfileFilter.username) || !this.matchUsername(tenantProfile.upn, tenantProfileFilter.username))) {
+      return false;
+    }
+    if (!!tenantProfileFilter.loginHint && !this.matchLoginHintWithTenantProfile(tenantProfile, tenantProfileFilter.loginHint)) {
+      return false;
+    }
+    if (!!tenantProfileFilter.upn && !(tenantProfile.upn === tenantProfileFilter.upn)) {
+      return false;
+    }
     return true;
   }
   idTokenClaimsMatchTenantProfileFilter(idTokenClaims, tenantProfileFilter) {
@@ -34230,7 +34245,7 @@ var CacheManager = class {
       if (!!tenantProfileFilter.loginHint && !this.matchLoginHintFromTokenClaims(idTokenClaims, tenantProfileFilter.loginHint)) {
         return false;
       }
-      if (!!tenantProfileFilter.username && !this.matchUsername(idTokenClaims.preferred_username, tenantProfileFilter.username)) {
+      if (!!tenantProfileFilter.username && !this.matchUsername(idTokenClaims.preferred_username, tenantProfileFilter.username) && !this.matchUsername(idTokenClaims.upn, tenantProfileFilter.username)) {
         return false;
       }
       if (!!tenantProfileFilter.name && !this.matchName(idTokenClaims, tenantProfileFilter.name)) {
@@ -34322,9 +34337,6 @@ var CacheManager = class {
       if (!!accountFilter.homeAccountId && !this.matchHomeAccountId(entity, accountFilter.homeAccountId)) {
         return;
       }
-      if (!!accountFilter.username && !this.matchUsername(entity.username, accountFilter.username)) {
-        return;
-      }
       if (!!accountFilter.environment && !this.matchEnvironment(entity, accountFilter.environment, correlationId)) {
         return;
       }
@@ -34339,7 +34351,10 @@ var CacheManager = class {
       }
       const tenantProfileFilter = {
         localAccountId: accountFilter?.localAccountId,
-        name: accountFilter?.name
+        name: accountFilter?.name,
+        username: accountFilter?.username,
+        loginHint: accountFilter?.loginHint,
+        upn: accountFilter?.upn
       };
       const matchingTenantProfiles = entity.tenantProfiles?.filter((tenantProfile) => {
         return this.tenantProfileMatchesFilter(tenantProfile, tenantProfileFilter);
@@ -34558,10 +34573,10 @@ var CacheManager = class {
         const numHomeIdTokens = homeIdTokenMap.size;
         if (numHomeIdTokens < 1) {
           this.commonLogger.info("CacheManager:getIdToken - Multiple ID tokens found for account but none match account entity tenant id, returning first result", correlationId);
-          return idTokenMap.values().next().value;
+          return idTokenMap.values().next().value ?? null;
         } else if (numHomeIdTokens === 1) {
           this.commonLogger.info("CacheManager:getIdToken - Multiple ID tokens found for account, defaulting to home tenant profile", correlationId);
-          return homeIdTokenMap.values().next().value;
+          return homeIdTokenMap.values().next().value ?? null;
         } else {
           tokensToBeRemoved = homeIdTokenMap;
         }
@@ -34574,7 +34589,7 @@ var CacheManager = class {
       return null;
     }
     this.commonLogger.info("CacheManager:getIdToken - Returning ID token", correlationId);
-    return idTokenMap.values().next().value;
+    return idTokenMap.values().next().value ?? null;
   }
   /**
    * Gets all idTokens matching the given filter
@@ -34849,6 +34864,15 @@ var CacheManager = class {
     return !!(cachedUsername && typeof cachedUsername === "string" && filterUsername?.toLowerCase() === cachedUsername.toLowerCase());
   }
   /**
+   * helper to match loginhints
+   * @param entity
+   * @param loginHint
+   * @returns
+   */
+  matchLoginHintWithTenantProfile(tenantProfile, loginHintFilter) {
+    return tenantProfile.loginHint === loginHintFilter || tenantProfile.username === loginHintFilter || tenantProfile.upn === loginHintFilter;
+  }
+  /**
    * helper to match assertion
    * @param value
    * @param oboAssertion
@@ -34932,6 +34956,9 @@ var CacheManager = class {
       return true;
     }
     if (tokenClaims.upn === loginHint) {
+      return true;
+    }
+    if (tokenClaims.emails && tokenClaims.emails.includes(loginHint)) {
       return true;
     }
     return false;
@@ -35081,14 +35108,14 @@ var DefaultStorageClass = class extends CacheManager {
   }
 };
 
-// node_modules/@azure/msal-common/dist/telemetry/performance/PerformanceEvent.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/telemetry/performance/PerformanceEvent.mjs
 var PerformanceEventStatus = {
   NotStarted: 0,
   InProgress: 1,
   Completed: 2
 };
 
-// node_modules/@azure/msal-common/dist/telemetry/performance/StubPerformanceClient.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/telemetry/performance/StubPerformanceClient.mjs
 var StubPerformanceClient = class {
   generateId() {
     return "callback-id";
@@ -35141,7 +35168,7 @@ var StubPerformanceClient = class {
   }
 };
 
-// node_modules/@azure/msal-common/dist/config/ClientConfiguration.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/config/ClientConfiguration.mjs
 var DEFAULT_SYSTEM_OPTIONS = {
   tokenRenewalOffsetSeconds: DEFAULT_TOKEN_RENEWAL_OFFSET_SEC,
   preventCorsPreflight: false
@@ -35214,107 +35241,48 @@ function isOidcProtocolMode(config) {
   return config.authOptions.authority.options.protocolMode === ProtocolMode.OIDC;
 }
 
-// node_modules/@azure/msal-common/dist/error/ServerError.mjs
-var ServerError = class _ServerError extends AuthError {
-  constructor(errorCode, errorMessage, subError, errorNo, status) {
-    super(errorCode, errorMessage, subError);
-    this.name = "ServerError";
-    this.errorNo = errorNo;
-    this.status = status;
-    Object.setPrototypeOf(this, _ServerError.prototype);
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/persistence/TokenCacheContext.mjs
+var TokenCacheContext = class {
+  constructor(tokenCache, hasChanged) {
+    this.cache = tokenCache;
+    this.hasChanged = hasChanged;
+  }
+  /**
+   * boolean which indicates the changes in cache
+   */
+  get cacheHasChanged() {
+    return this.hasChanged;
+  }
+  /**
+   * function to retrieve the token cache
+   */
+  get tokenCache() {
+    return this.cache;
   }
 };
 
-// node_modules/@azure/msal-common/dist/error/InteractionRequiredAuthErrorCodes.mjs
-var InteractionRequiredAuthErrorCodes_exports = {};
-__export(InteractionRequiredAuthErrorCodes_exports, {
-  badToken: () => badToken,
-  consentRequired: () => consentRequired,
-  interactionRequired: () => interactionRequired,
-  interruptedUser: () => interruptedUser,
-  loginRequired: () => loginRequired,
-  nativeAccountUnavailable: () => nativeAccountUnavailable,
-  noTokensFound: () => noTokensFound,
-  refreshTokenExpired: () => refreshTokenExpired,
-  uxNotAllowed: () => uxNotAllowed
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/utils/CacheHelpers.mjs
+var CacheHelpers_exports = {};
+__export(CacheHelpers_exports, {
+  createAccessTokenEntity: () => createAccessTokenEntity,
+  createIdTokenEntity: () => createIdTokenEntity,
+  createRefreshTokenEntity: () => createRefreshTokenEntity,
+  generateAppMetadataKey: () => generateAppMetadataKey,
+  generateAuthorityMetadataExpiresAt: () => generateAuthorityMetadataExpiresAt,
+  isAccessTokenEntity: () => isAccessTokenEntity,
+  isAppMetadataEntity: () => isAppMetadataEntity,
+  isAuthorityMetadataEntity: () => isAuthorityMetadataEntity,
+  isAuthorityMetadataExpired: () => isAuthorityMetadataExpired,
+  isCredentialEntity: () => isCredentialEntity,
+  isIdTokenEntity: () => isIdTokenEntity,
+  isRefreshTokenEntity: () => isRefreshTokenEntity,
+  isServerTelemetryEntity: () => isServerTelemetryEntity,
+  isThrottlingEntity: () => isThrottlingEntity,
+  updateAuthorityEndpointMetadata: () => updateAuthorityEndpointMetadata,
+  updateCloudDiscoveryMetadata: () => updateCloudDiscoveryMetadata
 });
-var noTokensFound = "no_tokens_found";
-var nativeAccountUnavailable = "native_account_unavailable";
-var refreshTokenExpired = "refresh_token_expired";
-var uxNotAllowed = "ux_not_allowed";
-var interactionRequired = "interaction_required";
-var consentRequired = "consent_required";
-var loginRequired = "login_required";
-var badToken = "bad_token";
-var interruptedUser = "interrupted_user";
 
-// node_modules/@azure/msal-common/dist/error/InteractionRequiredAuthError.mjs
-var InteractionRequiredServerErrorMessage = [
-  interactionRequired,
-  consentRequired,
-  loginRequired,
-  badToken,
-  uxNotAllowed,
-  interruptedUser
-];
-var InteractionRequiredAuthSubErrorMessage = [
-  "message_only",
-  "additional_action",
-  "basic_action",
-  "user_password_expired",
-  "consent_required",
-  "bad_token",
-  "ux_not_allowed",
-  "interrupted_user"
-];
-var InteractionRequiredAuthError = class _InteractionRequiredAuthError extends AuthError {
-  constructor(errorCode, errorMessage, subError, timestamp, traceId, correlationId, claims, errorNo) {
-    super(errorCode, errorMessage, subError);
-    Object.setPrototypeOf(this, _InteractionRequiredAuthError.prototype);
-    this.timestamp = timestamp || "";
-    this.traceId = traceId || "";
-    this.correlationId = correlationId || "";
-    this.claims = claims || "";
-    this.name = "InteractionRequiredAuthError";
-    this.errorNo = errorNo;
-  }
-};
-function isInteractionRequiredError(errorCode, errorString, subError) {
-  const isInteractionRequiredErrorCode = !!errorCode && InteractionRequiredServerErrorMessage.indexOf(errorCode) > -1;
-  const isInteractionRequiredSubError = !!subError && InteractionRequiredAuthSubErrorMessage.indexOf(subError) > -1;
-  const isInteractionRequiredErrorDesc = !!errorString && InteractionRequiredServerErrorMessage.some((irErrorCode) => {
-    return errorString.indexOf(irErrorCode) > -1;
-  });
-  return isInteractionRequiredErrorCode || isInteractionRequiredErrorDesc || isInteractionRequiredSubError;
-}
-function createInteractionRequiredAuthError(errorCode, errorMessage) {
-  return new InteractionRequiredAuthError(errorCode, errorMessage);
-}
-
-// node_modules/@azure/msal-common/dist/utils/ProtocolUtils.mjs
-function parseRequestState(base64Decode, state3) {
-  if (!base64Decode) {
-    throw createClientAuthError(noCryptoObject);
-  }
-  if (!state3) {
-    throw createClientAuthError(invalidState);
-  }
-  try {
-    const splitState = state3.split(RESOURCE_DELIM);
-    const libraryState = splitState[0];
-    const userState = splitState.length > 1 ? splitState.slice(1).join(RESOURCE_DELIM) : "";
-    const libraryStateString = base64Decode(libraryState);
-    const libraryStateObj = JSON.parse(libraryStateString);
-    return {
-      userRequestState: userState || "",
-      libraryState: libraryStateObj
-    };
-  } catch (e) {
-    throw createClientAuthError(invalidState);
-  }
-}
-
-// node_modules/@azure/msal-common/dist/utils/TimeUtils.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/TimeUtils.mjs
 var TimeUtils_exports = {};
 __export(TimeUtils_exports, {
   delay: () => delay,
@@ -35354,198 +35322,7 @@ function delay(t, value) {
   return new Promise((resolve) => setTimeout(() => resolve(value), t));
 }
 
-// node_modules/@azure/msal-common/dist/telemetry/performance/PerformanceEvents.mjs
-var NetworkClientSendPostRequestAsync = "networkClientSendPostRequestAsync";
-var RefreshTokenClientExecutePostToTokenEndpoint = "refreshTokenClientExecutePostToTokenEndpoint";
-var AuthorizationCodeClientExecutePostToTokenEndpoint = "authorizationCodeClientExecutePostToTokenEndpoint";
-var RefreshTokenClientExecuteTokenRequest = "refreshTokenClientExecuteTokenRequest";
-var RefreshTokenClientAcquireToken = "refreshTokenClientAcquireToken";
-var RefreshTokenClientAcquireTokenWithCachedRefreshToken = "refreshTokenClientAcquireTokenWithCachedRefreshToken";
-var RefreshTokenClientCreateTokenRequestBody = "refreshTokenClientCreateTokenRequestBody";
-var SilentFlowClientGenerateResultFromCacheRecord = "silentFlowClientGenerateResultFromCacheRecord";
-var AuthClientExecuteTokenRequest = "authClientExecuteTokenRequest";
-var AuthClientCreateTokenRequestBody = "authClientCreateTokenRequestBody";
-var UpdateTokenEndpointAuthority = "updateTokenEndpointAuthority";
-var PopTokenGenerateCnf = "popTokenGenerateCnf";
-var HandleServerTokenResponse = "handleServerTokenResponse";
-var AuthorityResolveEndpointsAsync = "authorityResolveEndpointsAsync";
-var AuthorityGetCloudDiscoveryMetadataFromNetwork = "authorityGetCloudDiscoveryMetadataFromNetwork";
-var AuthorityUpdateCloudDiscoveryMetadata = "authorityUpdateCloudDiscoveryMetadata";
-var AuthorityGetEndpointMetadataFromNetwork = "authorityGetEndpointMetadataFromNetwork";
-var AuthorityUpdateEndpointMetadata = "authorityUpdateEndpointMetadata";
-var AuthorityUpdateMetadataWithRegionalInformation = "authorityUpdateMetadataWithRegionalInformation";
-var RegionDiscoveryDetectRegion = "regionDiscoveryDetectRegion";
-var RegionDiscoveryGetRegionFromIMDS = "regionDiscoveryGetRegionFromIMDS";
-var RegionDiscoveryGetCurrentVersion = "regionDiscoveryGetCurrentVersion";
-var CacheManagerGetRefreshToken = "cacheManagerGetRefreshToken";
-
-// node_modules/@azure/msal-common/dist/utils/FunctionWrappers.mjs
-var invoke = (callback, eventName, logger31, telemetryClient, correlationId) => {
-  return (...args) => {
-    logger31.trace(`Executing function '${eventName}'`, correlationId);
-    const inProgressEvent = telemetryClient.startMeasurement(eventName, correlationId);
-    if (correlationId) {
-      telemetryClient.incrementFields({ [`ext.${eventName}CallCount`]: 1 }, correlationId);
-    }
-    try {
-      const result = callback(...args);
-      inProgressEvent.end({
-        success: true
-      });
-      logger31.trace(`Returning result from '${eventName}'`, correlationId);
-      return result;
-    } catch (e) {
-      logger31.trace(`Error occurred in '${eventName}'`, correlationId);
-      try {
-        logger31.trace(JSON.stringify(e), correlationId);
-      } catch (e2) {
-        logger31.trace("Unable to print error message.", correlationId);
-      }
-      inProgressEvent.end({
-        success: false
-      }, e);
-      throw e;
-    }
-  };
-};
-var invokeAsync = (callback, eventName, logger31, telemetryClient, correlationId) => {
-  return (...args) => {
-    logger31.trace(`Executing function '${eventName}'`, correlationId);
-    const inProgressEvent = telemetryClient.startMeasurement(eventName, correlationId);
-    if (correlationId) {
-      telemetryClient.incrementFields({ [`ext.${eventName}CallCount`]: 1 }, correlationId);
-    }
-    return callback(...args).then((response) => {
-      logger31.trace(`Returning result from '${eventName}'`, correlationId);
-      inProgressEvent.end({
-        success: true
-      });
-      return response;
-    }).catch((e) => {
-      logger31.trace(`Error occurred in '${eventName}'`, correlationId);
-      try {
-        logger31.trace(JSON.stringify(e), correlationId);
-      } catch (e2) {
-        logger31.trace("Unable to print error message.", correlationId);
-      }
-      inProgressEvent.end({
-        success: false
-      }, e);
-      throw e;
-    });
-  };
-};
-
-// node_modules/@azure/msal-common/dist/crypto/PopTokenGenerator.mjs
-var KeyLocation = {
-  SW: "sw"
-};
-var PopTokenGenerator = class {
-  constructor(cryptoUtils, performanceClient) {
-    this.cryptoUtils = cryptoUtils;
-    this.performanceClient = performanceClient;
-  }
-  /**
-   * Generates the req_cnf validated at the RP in the POP protocol for SHR parameters
-   * and returns an object containing the keyid, the full req_cnf string and the req_cnf string hash
-   * @param request
-   * @returns
-   */
-  async generateCnf(request5, logger31) {
-    const reqCnf = await invokeAsync(this.generateKid.bind(this), PopTokenGenerateCnf, logger31, this.performanceClient, request5.correlationId)(request5);
-    const reqCnfString = this.cryptoUtils.base64UrlEncode(JSON.stringify(reqCnf));
-    return {
-      kid: reqCnf.kid,
-      reqCnfString
-    };
-  }
-  /**
-   * Generates key_id for a SHR token request
-   * @param request
-   * @returns
-   */
-  async generateKid(request5) {
-    const kidThumbprint = await this.cryptoUtils.getPublicKeyThumbprint(request5);
-    return {
-      kid: kidThumbprint,
-      xms_ksl: KeyLocation.SW
-    };
-  }
-  /**
-   * Signs the POP access_token with the local generated key-pair
-   * @param accessToken
-   * @param request
-   * @returns
-   */
-  async signPopToken(accessToken, keyId, request5) {
-    return this.signPayload(accessToken, keyId, request5);
-  }
-  /**
-   * Utility function to generate the signed JWT for an access_token
-   * @param payload
-   * @param kid
-   * @param request
-   * @param claims
-   * @returns
-   */
-  async signPayload(payload, keyId, request5, claims) {
-    const { resourceRequestMethod, resourceRequestUri, shrClaims, shrNonce, shrOptions } = request5;
-    const resourceUrlString = resourceRequestUri ? new UrlString(resourceRequestUri) : void 0;
-    const resourceUrlComponents = resourceUrlString?.getUrlComponents();
-    return this.cryptoUtils.signJwt({
-      at: payload,
-      ts: nowSeconds(),
-      m: resourceRequestMethod?.toUpperCase(),
-      u: resourceUrlComponents?.HostNameAndPort,
-      nonce: shrNonce || this.cryptoUtils.createNewGuid(),
-      p: resourceUrlComponents?.AbsolutePath,
-      q: resourceUrlComponents?.QueryString ? [[], resourceUrlComponents.QueryString] : void 0,
-      client_claims: shrClaims || void 0,
-      ...claims
-    }, keyId, shrOptions, request5.correlationId);
-  }
-};
-
-// node_modules/@azure/msal-common/dist/cache/persistence/TokenCacheContext.mjs
-var TokenCacheContext = class {
-  constructor(tokenCache, hasChanged) {
-    this.cache = tokenCache;
-    this.hasChanged = hasChanged;
-  }
-  /**
-   * boolean which indicates the changes in cache
-   */
-  get cacheHasChanged() {
-    return this.hasChanged;
-  }
-  /**
-   * function to retrieve the token cache
-   */
-  get tokenCache() {
-    return this.cache;
-  }
-};
-
-// node_modules/@azure/msal-common/dist/cache/utils/CacheHelpers.mjs
-var CacheHelpers_exports = {};
-__export(CacheHelpers_exports, {
-  createAccessTokenEntity: () => createAccessTokenEntity,
-  createIdTokenEntity: () => createIdTokenEntity,
-  createRefreshTokenEntity: () => createRefreshTokenEntity,
-  generateAppMetadataKey: () => generateAppMetadataKey,
-  generateAuthorityMetadataExpiresAt: () => generateAuthorityMetadataExpiresAt,
-  isAccessTokenEntity: () => isAccessTokenEntity,
-  isAppMetadataEntity: () => isAppMetadataEntity,
-  isAuthorityMetadataEntity: () => isAuthorityMetadataEntity,
-  isAuthorityMetadataExpired: () => isAuthorityMetadataExpired,
-  isCredentialEntity: () => isCredentialEntity,
-  isIdTokenEntity: () => isIdTokenEntity,
-  isRefreshTokenEntity: () => isRefreshTokenEntity,
-  isServerTelemetryEntity: () => isServerTelemetryEntity,
-  isThrottlingEntity: () => isThrottlingEntity,
-  updateAuthorityEndpointMetadata: () => updateAuthorityEndpointMetadata,
-  updateCloudDiscoveryMetadata: () => updateCloudDiscoveryMetadata
-});
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/cache/utils/CacheHelpers.mjs
 function createIdTokenEntity(homeAccountId, environment, idToken, clientId, tenantId) {
   const idTokenEntity = {
     credentialType: CredentialType.ID_TOKEN,
@@ -35698,13 +35475,265 @@ function isAuthorityMetadataExpired(metadata) {
   return metadata.expiresAt <= nowSeconds();
 }
 
-// node_modules/@azure/msal-common/dist/response/ResponseHandler.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/telemetry/performance/PerformanceEvents.mjs
+var NetworkClientSendPostRequestAsync = "networkClientSendPostRequestAsync";
+var RefreshTokenClientExecutePostToTokenEndpoint = "refreshTokenClientExecutePostToTokenEndpoint";
+var AuthorizationCodeClientExecutePostToTokenEndpoint = "authorizationCodeClientExecutePostToTokenEndpoint";
+var RefreshTokenClientExecuteTokenRequest = "refreshTokenClientExecuteTokenRequest";
+var RefreshTokenClientAcquireToken = "refreshTokenClientAcquireToken";
+var RefreshTokenClientAcquireTokenWithCachedRefreshToken = "refreshTokenClientAcquireTokenWithCachedRefreshToken";
+var RefreshTokenClientCreateTokenRequestBody = "refreshTokenClientCreateTokenRequestBody";
+var SilentFlowClientGenerateResultFromCacheRecord = "silentFlowClientGenerateResultFromCacheRecord";
+var AuthClientExecuteTokenRequest = "authClientExecuteTokenRequest";
+var AuthClientCreateTokenRequestBody = "authClientCreateTokenRequestBody";
+var UpdateTokenEndpointAuthority = "updateTokenEndpointAuthority";
+var PopTokenGenerateCnf = "popTokenGenerateCnf";
+var HandleServerTokenResponse = "handleServerTokenResponse";
+var AuthorityResolveEndpointsAsync = "authorityResolveEndpointsAsync";
+var AuthorityGetCloudDiscoveryMetadataFromNetwork = "authorityGetCloudDiscoveryMetadataFromNetwork";
+var AuthorityUpdateCloudDiscoveryMetadata = "authorityUpdateCloudDiscoveryMetadata";
+var AuthorityGetEndpointMetadataFromNetwork = "authorityGetEndpointMetadataFromNetwork";
+var AuthorityUpdateEndpointMetadata = "authorityUpdateEndpointMetadata";
+var AuthorityUpdateMetadataWithRegionalInformation = "authorityUpdateMetadataWithRegionalInformation";
+var RegionDiscoveryDetectRegion = "regionDiscoveryDetectRegion";
+var RegionDiscoveryGetRegionFromIMDS = "regionDiscoveryGetRegionFromIMDS";
+var RegionDiscoveryGetCurrentVersion = "regionDiscoveryGetCurrentVersion";
+var CacheManagerGetRefreshToken = "cacheManagerGetRefreshToken";
+
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/FunctionWrappers.mjs
+var invoke = (callback, eventName, logger30, telemetryClient, correlationId) => {
+  return (...args) => {
+    logger30.trace(`Executing function '${eventName}'`, correlationId);
+    const inProgressEvent = telemetryClient.startMeasurement(eventName, correlationId);
+    if (correlationId) {
+      telemetryClient.incrementFields({ [`ext.${eventName}CallCount`]: 1 }, correlationId);
+    }
+    try {
+      const result = callback(...args);
+      inProgressEvent.end({
+        success: true
+      });
+      logger30.trace(`Returning result from '${eventName}'`, correlationId);
+      return result;
+    } catch (e) {
+      logger30.trace(`Error occurred in '${eventName}'`, correlationId);
+      try {
+        logger30.trace(JSON.stringify(e), correlationId);
+      } catch (e2) {
+        logger30.trace("Unable to print error message.", correlationId);
+      }
+      inProgressEvent.end({
+        success: false
+      }, e);
+      throw e;
+    }
+  };
+};
+var invokeAsync = (callback, eventName, logger30, telemetryClient, correlationId) => {
+  return (...args) => {
+    logger30.trace(`Executing function '${eventName}'`, correlationId);
+    const inProgressEvent = telemetryClient.startMeasurement(eventName, correlationId);
+    if (correlationId) {
+      telemetryClient.incrementFields({ [`ext.${eventName}CallCount`]: 1 }, correlationId);
+    }
+    return callback(...args).then((response) => {
+      logger30.trace(`Returning result from '${eventName}'`, correlationId);
+      inProgressEvent.end({
+        success: true
+      });
+      return response;
+    }).catch((e) => {
+      logger30.trace(`Error occurred in '${eventName}'`, correlationId);
+      try {
+        logger30.trace(JSON.stringify(e), correlationId);
+      } catch (e2) {
+        logger30.trace("Unable to print error message.", correlationId);
+      }
+      inProgressEvent.end({
+        success: false
+      }, e);
+      throw e;
+    });
+  };
+};
+
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/crypto/PopTokenGenerator.mjs
+var KeyLocation = {
+  SW: "sw"
+};
+var PopTokenGenerator = class {
+  constructor(cryptoUtils, performanceClient) {
+    this.cryptoUtils = cryptoUtils;
+    this.performanceClient = performanceClient;
+  }
+  /**
+   * Generates the req_cnf validated at the RP in the POP protocol for SHR parameters
+   * and returns an object containing the keyid, the full req_cnf string and the req_cnf string hash
+   * @param request
+   * @returns
+   */
+  async generateCnf(request5, logger30) {
+    const reqCnf = await invokeAsync(this.generateKid.bind(this), PopTokenGenerateCnf, logger30, this.performanceClient, request5.correlationId)(request5);
+    const reqCnfString = this.cryptoUtils.base64UrlEncode(JSON.stringify(reqCnf));
+    return {
+      kid: reqCnf.kid,
+      reqCnfString
+    };
+  }
+  /**
+   * Generates key_id for a SHR token request
+   * @param request
+   * @returns
+   */
+  async generateKid(request5) {
+    const kidThumbprint = await this.cryptoUtils.getPublicKeyThumbprint(request5);
+    return {
+      kid: kidThumbprint,
+      xms_ksl: KeyLocation.SW
+    };
+  }
+  /**
+   * Signs the POP access_token with the local generated key-pair
+   * @param accessToken
+   * @param request
+   * @returns
+   */
+  async signPopToken(accessToken, keyId, request5) {
+    return this.signPayload(accessToken, keyId, request5);
+  }
+  /**
+   * Utility function to generate the signed JWT for an access_token
+   * @param payload
+   * @param kid
+   * @param request
+   * @param claims
+   * @returns
+   */
+  async signPayload(payload, keyId, request5, claims) {
+    const { resourceRequestMethod, resourceRequestUri, shrClaims, shrNonce, shrOptions } = request5;
+    const resourceUrlString = resourceRequestUri ? new UrlString(resourceRequestUri) : void 0;
+    const resourceUrlComponents = resourceUrlString?.getUrlComponents();
+    return this.cryptoUtils.signJwt({
+      at: payload,
+      ts: nowSeconds(),
+      m: resourceRequestMethod?.toUpperCase(),
+      u: resourceUrlComponents?.HostNameAndPort,
+      nonce: shrNonce || this.cryptoUtils.createNewGuid(),
+      p: resourceUrlComponents?.AbsolutePath,
+      q: resourceUrlComponents?.QueryString ? [[], resourceUrlComponents.QueryString] : void 0,
+      client_claims: shrClaims || void 0,
+      ...claims
+    }, keyId, shrOptions, request5.correlationId);
+  }
+};
+
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/InteractionRequiredAuthErrorCodes.mjs
+var InteractionRequiredAuthErrorCodes_exports = {};
+__export(InteractionRequiredAuthErrorCodes_exports, {
+  badToken: () => badToken,
+  consentRequired: () => consentRequired,
+  interactionRequired: () => interactionRequired,
+  interruptedUser: () => interruptedUser,
+  loginRequired: () => loginRequired,
+  nativeAccountUnavailable: () => nativeAccountUnavailable,
+  noTokensFound: () => noTokensFound,
+  refreshTokenExpired: () => refreshTokenExpired,
+  uxNotAllowed: () => uxNotAllowed
+});
+var noTokensFound = "no_tokens_found";
+var nativeAccountUnavailable = "native_account_unavailable";
+var refreshTokenExpired = "refresh_token_expired";
+var uxNotAllowed = "ux_not_allowed";
+var interactionRequired = "interaction_required";
+var consentRequired = "consent_required";
+var loginRequired = "login_required";
+var badToken = "bad_token";
+var interruptedUser = "interrupted_user";
+
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/InteractionRequiredAuthError.mjs
+var InteractionRequiredServerErrorMessage = [
+  interactionRequired,
+  consentRequired,
+  loginRequired,
+  badToken,
+  uxNotAllowed,
+  interruptedUser
+];
+var InteractionRequiredAuthSubErrorMessage = [
+  "message_only",
+  "additional_action",
+  "basic_action",
+  "user_password_expired",
+  "consent_required",
+  "bad_token",
+  "ux_not_allowed",
+  "interrupted_user"
+];
+var InteractionRequiredAuthError = class _InteractionRequiredAuthError extends AuthError {
+  constructor(errorCode, errorMessage, subError, timestamp, traceId, correlationId, claims, errorNo) {
+    super(errorCode, errorMessage, subError);
+    Object.setPrototypeOf(this, _InteractionRequiredAuthError.prototype);
+    this.timestamp = timestamp || "";
+    this.traceId = traceId || "";
+    this.correlationId = correlationId || "";
+    this.claims = claims || "";
+    this.name = "InteractionRequiredAuthError";
+    this.errorNo = errorNo;
+  }
+};
+function isInteractionRequiredError(errorCode, errorString, subError) {
+  const isInteractionRequiredErrorCode = !!errorCode && InteractionRequiredServerErrorMessage.indexOf(errorCode) > -1;
+  const isInteractionRequiredSubError = !!subError && InteractionRequiredAuthSubErrorMessage.indexOf(subError) > -1;
+  const isInteractionRequiredErrorDesc = !!errorString && InteractionRequiredServerErrorMessage.some((irErrorCode) => {
+    return errorString.indexOf(irErrorCode) > -1;
+  });
+  return isInteractionRequiredErrorCode || isInteractionRequiredErrorDesc || isInteractionRequiredSubError;
+}
+function createInteractionRequiredAuthError(errorCode, errorMessage) {
+  return new InteractionRequiredAuthError(errorCode, errorMessage);
+}
+
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/ServerError.mjs
+var ServerError = class _ServerError extends AuthError {
+  constructor(errorCode, errorMessage, subError, errorNo, status) {
+    super(errorCode, errorMessage, subError);
+    this.name = "ServerError";
+    this.errorNo = errorNo;
+    this.status = status;
+    Object.setPrototypeOf(this, _ServerError.prototype);
+  }
+};
+
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/ProtocolUtils.mjs
+function parseRequestState(base64Decode, state3) {
+  if (!base64Decode) {
+    throw createClientAuthError(noCryptoObject);
+  }
+  if (!state3) {
+    throw createClientAuthError(invalidState);
+  }
+  try {
+    const splitState = state3.split(RESOURCE_DELIM);
+    const libraryState = splitState[0];
+    const userState = splitState.length > 1 ? splitState.slice(1).join(RESOURCE_DELIM) : "";
+    const libraryStateString = base64Decode(libraryState);
+    const libraryStateObj = JSON.parse(libraryStateString);
+    return {
+      userRequestState: userState || "",
+      libraryState: libraryStateObj
+    };
+  } catch (e) {
+    throw createClientAuthError(invalidState);
+  }
+}
+
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/response/ResponseHandler.mjs
 var ResponseHandler = class _ResponseHandler {
-  constructor(clientId, cacheStorage, cryptoObj, logger31, performanceClient, serializableCache, persistencePlugin) {
+  constructor(clientId, cacheStorage, cryptoObj, logger30, performanceClient, serializableCache, persistencePlugin) {
     this.clientId = clientId;
     this.cacheStorage = cacheStorage;
     this.cryptoObj = cryptoObj;
-    this.logger = logger31;
+    this.logger = logger30;
     this.performanceClient = performanceClient;
     this.serializableCache = serializableCache;
     this.persistencePlugin = persistencePlugin;
@@ -35822,7 +35851,8 @@ ${serverError}`, correlationId);
         authCodePayload,
         void 0,
         // nativeAccountId
-        this.logger
+        this.logger,
+        this.performanceClient
       );
     }
     let cachedAccessToken = null;
@@ -35941,16 +35971,15 @@ ${serverError}`, correlationId);
     };
   }
 };
-function buildAccountToCache(cacheStorage, authority, homeAccountId, base64Decode, correlationId, idTokenClaims, clientInfo, environment, claimsTenantId, authCodePayload, nativeAccountId, logger31) {
-  logger31?.verbose("setCachedAccount called", correlationId);
-  const accountKeys = cacheStorage.getAccountKeys();
-  const baseAccountKey = accountKeys.find((accountKey) => {
-    return accountKey.startsWith(homeAccountId);
-  });
-  let cachedAccount = null;
-  if (baseAccountKey) {
-    cachedAccount = cacheStorage.getAccount(baseAccountKey, correlationId);
+function buildAccountToCache(cacheStorage, authority, homeAccountId, base64Decode, correlationId, idTokenClaims, clientInfo, environment, claimsTenantId, authCodePayload, nativeAccountId, logger30, performanceClient) {
+  logger30?.verbose("setCachedAccount called", correlationId);
+  const accountEnvironment = environment || authority.getPreferredCache();
+  const matchedAccounts = cacheStorage.getAccountsFilteredBy({ homeAccountId, environment: accountEnvironment }, correlationId);
+  performanceClient?.addFields({ cacheMatchedAccounts: matchedAccounts.length }, correlationId);
+  if (matchedAccounts.length > 1) {
+    logger30?.warning("Multiple base accounts matched homeAccountId. Ignoring cached account and creating a new base account.", correlationId);
   }
+  const cachedAccount = matchedAccounts.length === 1 ? matchedAccounts[0] : null;
   const baseAccount = cachedAccount || createAccountEntity({
     homeAccountId,
     idTokenClaims,
@@ -35972,13 +36001,13 @@ function buildAccountToCache(cacheStorage, authority, homeAccountId, base64Decod
   return baseAccount;
 }
 
-// node_modules/@azure/msal-common/dist/account/CcsCredential.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/account/CcsCredential.mjs
 var CcsCredentialType = {
   HOME_ACCOUNT_ID: "home_account_id",
   UPN: "UPN"
 };
 
-// node_modules/@azure/msal-common/dist/utils/ClientAssertionUtils.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/utils/ClientAssertionUtils.mjs
 async function getClientAssertion(clientAssertion, clientId, tokenEndpoint) {
   if (typeof clientAssertion === "string") {
     return clientAssertion;
@@ -35991,7 +36020,7 @@ async function getClientAssertion(clientAssertion, clientId, tokenEndpoint) {
   }
 }
 
-// node_modules/@azure/msal-common/dist/network/RequestThumbprint.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/network/RequestThumbprint.mjs
 function getRequestThumbprint(clientId, request5, homeAccountId) {
   return {
     clientId,
@@ -36008,7 +36037,7 @@ function getRequestThumbprint(clientId, request5, homeAccountId) {
   };
 }
 
-// node_modules/@azure/msal-common/dist/protocol/Token.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/protocol/Token.mjs
 var Token_exports = {};
 __export(Token_exports, {
   createTokenQueryParameters: () => createTokenQueryParameters,
@@ -36017,7 +36046,7 @@ __export(Token_exports, {
   sendPostRequest: () => sendPostRequest
 });
 
-// node_modules/@azure/msal-common/dist/network/ThrottlingUtils.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/network/ThrottlingUtils.mjs
 var ThrottlingUtils = class _ThrottlingUtils {
   /**
    * Prepares a RequestThumbprint to be stored as a key.
@@ -36093,7 +36122,7 @@ var ThrottlingUtils = class _ThrottlingUtils {
   }
 };
 
-// node_modules/@azure/msal-common/dist/error/NetworkError.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/NetworkError.mjs
 var NetworkError = class _NetworkError extends AuthError {
   constructor(error2, httpStatus, responseHeaders) {
     super(error2.errorCode, error2.errorMessage, error2.subError);
@@ -36109,8 +36138,8 @@ function createNetworkError(error2, httpStatus, responseHeaders, additionalError
   return new NetworkError(error2, httpStatus, responseHeaders);
 }
 
-// node_modules/@azure/msal-common/dist/protocol/Token.mjs
-function createTokenRequestHeaders(logger31, preventCorsPreflight, ccsCred) {
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/protocol/Token.mjs
+function createTokenRequestHeaders(logger30, preventCorsPreflight, ccsCred) {
   const headers = {};
   headers[HeaderNames.CONTENT_TYPE] = URL_FORM_CONTENT_TYPE;
   if (!preventCorsPreflight && ccsCred) {
@@ -36120,7 +36149,7 @@ function createTokenRequestHeaders(logger31, preventCorsPreflight, ccsCred) {
           const clientInfo = buildClientInfoFromHomeAccountId(ccsCred.credential);
           headers[HeaderNames.CCS_HEADER] = `Oid:${clientInfo.uid}@${clientInfo.utid}`;
         } catch (e) {
-          logger31.verbose(`Could not parse home account ID for CCS Header: '${e}'`, "");
+          logger30.verbose(`Could not parse home account ID for CCS Header: '${e}'`, "");
         }
         break;
       case CcsCredentialType.UPN:
@@ -36142,18 +36171,18 @@ function createTokenQueryParameters(request5, clientId, redirectUri, performance
   instrumentBrokerParams(parameters, request5.correlationId, performanceClient);
   return mapToQueryString(parameters);
 }
-async function executePostToTokenEndpoint(tokenEndpoint, queryString, headers, thumbprint, correlationId, cacheManager, networkClient, logger31, performanceClient, serverTelemetryManager) {
-  const response = await sendPostRequest(thumbprint, tokenEndpoint, { body: queryString, headers }, correlationId, cacheManager, networkClient, logger31, performanceClient);
+async function executePostToTokenEndpoint(tokenEndpoint, queryString, headers, thumbprint, correlationId, cacheManager, networkClient, logger30, performanceClient, serverTelemetryManager) {
+  const response = await sendPostRequest(thumbprint, tokenEndpoint, { body: queryString, headers }, correlationId, cacheManager, networkClient, logger30, performanceClient);
   if (serverTelemetryManager && response.status < 500 && response.status !== 429) {
     serverTelemetryManager.clearTelemetryCache();
   }
   return response;
 }
-async function sendPostRequest(thumbprint, tokenEndpoint, options, correlationId, cacheManager, networkClient, logger31, performanceClient) {
+async function sendPostRequest(thumbprint, tokenEndpoint, options, correlationId, cacheManager, networkClient, logger30, performanceClient) {
   ThrottlingUtils.preProcess(cacheManager, thumbprint, correlationId);
   let response;
   try {
-    response = await invokeAsync(networkClient.sendPostRequestAsync.bind(networkClient), NetworkClientSendPostRequestAsync, logger31, performanceClient, correlationId)(tokenEndpoint, options);
+    response = await invokeAsync(networkClient.sendPostRequestAsync.bind(networkClient), NetworkClientSendPostRequestAsync, logger30, performanceClient, correlationId)(tokenEndpoint, options);
     const responseHeaders = response.headers || {};
     performanceClient?.addFields({
       refreshTokenSize: response.body.refresh_token?.length || 0,
@@ -36184,32 +36213,32 @@ async function sendPostRequest(thumbprint, tokenEndpoint, options, correlationId
   return response;
 }
 
-// node_modules/@azure/msal-common/dist/authority/AuthorityFactory.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityFactory.mjs
 var AuthorityFactory_exports = {};
 __export(AuthorityFactory_exports, {
   createDiscoveredInstance: () => createDiscoveredInstance
 });
 
-// node_modules/@azure/msal-common/dist/authority/OpenIdConfigResponse.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/OpenIdConfigResponse.mjs
 function isOpenIdConfigResponse(response) {
   return response.hasOwnProperty("authorization_endpoint") && response.hasOwnProperty("token_endpoint") && response.hasOwnProperty("issuer") && response.hasOwnProperty("jwks_uri");
 }
 
-// node_modules/@azure/msal-common/dist/authority/CloudInstanceDiscoveryResponse.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/CloudInstanceDiscoveryResponse.mjs
 function isCloudInstanceDiscoveryResponse(response) {
   return response.hasOwnProperty("tenant_discovery_endpoint") && response.hasOwnProperty("metadata");
 }
 
-// node_modules/@azure/msal-common/dist/authority/CloudInstanceDiscoveryErrorResponse.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/CloudInstanceDiscoveryErrorResponse.mjs
 function isCloudInstanceDiscoveryErrorResponse(response) {
   return response.hasOwnProperty("error") && response.hasOwnProperty("error_description");
 }
 
-// node_modules/@azure/msal-common/dist/authority/RegionDiscovery.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/RegionDiscovery.mjs
 var RegionDiscovery = class _RegionDiscovery {
-  constructor(networkInterface, logger31, performanceClient, correlationId) {
+  constructor(networkInterface, logger30, performanceClient, correlationId) {
     this.networkInterface = networkInterface;
-    this.logger = logger31;
+    this.logger = logger30;
     this.performanceClient = performanceClient;
     this.correlationId = correlationId;
   }
@@ -36284,9 +36313,9 @@ RegionDiscovery.IMDS_OPTIONS = {
   }
 };
 
-// node_modules/@azure/msal-common/dist/authority/Authority.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/Authority.mjs
 var Authority = class _Authority {
-  constructor(authority, networkInterface, cacheManager, authorityOptions, logger31, correlationId, performanceClient, managedIdentity) {
+  constructor(authority, networkInterface, cacheManager, authorityOptions, logger30, correlationId, performanceClient, managedIdentity) {
     this.canonicalAuthority = authority;
     this._canonicalAuthority.validateAsUri();
     this.networkInterface = networkInterface;
@@ -36297,7 +36326,7 @@ var Authority = class _Authority {
       region_source: void 0,
       region_outcome: void 0
     };
-    this.logger = logger31;
+    this.logger = logger30;
     this.performanceClient = performanceClient;
     this.correlationId = correlationId;
     this.managedIdentity = managedIdentity || false;
@@ -36988,19 +37017,19 @@ function buildStaticAuthorityOptions(authOptions) {
   };
 }
 
-// node_modules/@azure/msal-common/dist/authority/AuthorityFactory.mjs
-async function createDiscoveredInstance(authorityUri, networkClient, cacheManager, authorityOptions, logger31, correlationId, performanceClient) {
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/authority/AuthorityFactory.mjs
+async function createDiscoveredInstance(authorityUri, networkClient, cacheManager, authorityOptions, logger30, correlationId, performanceClient) {
   const authorityUriFinal = Authority.transformCIAMAuthority(formatAuthorityUri(authorityUri));
-  const acquireTokenAuthority = new Authority(authorityUriFinal, networkClient, cacheManager, authorityOptions, logger31, correlationId, performanceClient);
+  const acquireTokenAuthority = new Authority(authorityUriFinal, networkClient, cacheManager, authorityOptions, logger30, correlationId, performanceClient);
   try {
-    await invokeAsync(acquireTokenAuthority.resolveEndpointsAsync.bind(acquireTokenAuthority), AuthorityResolveEndpointsAsync, logger31, performanceClient, correlationId)();
+    await invokeAsync(acquireTokenAuthority.resolveEndpointsAsync.bind(acquireTokenAuthority), AuthorityResolveEndpointsAsync, logger30, performanceClient, correlationId)();
     return acquireTokenAuthority;
   } catch (e) {
     throw createClientAuthError(endpointResolutionError);
   }
 }
 
-// node_modules/@azure/msal-common/dist/client/AuthorizationCodeClient.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/client/AuthorizationCodeClient.mjs
 var AuthorizationCodeClient = class {
   constructor(configuration, performanceClient) {
     this.includeRedirectUri = true;
@@ -37123,9 +37152,6 @@ var AuthorizationCodeClient = class {
         throw createClientConfigurationError(missingSshJwk);
       }
     }
-    if (!StringUtils.isEmptyObj(request5.claims) || this.config.authOptions.clientCapabilities && this.config.authOptions.clientCapabilities.length > 0) {
-      addClaims(parameters, request5.claims, this.config.authOptions.clientCapabilities);
-    }
     let ccsCred = void 0;
     if (request5.clientInfo) {
       try {
@@ -37167,6 +37193,7 @@ var AuthorizationCodeClient = class {
       });
     }
     instrumentBrokerParams(parameters, request5.correlationId, this.performanceClient);
+    addClaims(parameters, request5.claims, this.config.authOptions.clientCapabilities, request5.skipBrokerClaims);
     return mapToQueryString(parameters);
   }
   /**
@@ -37210,7 +37237,7 @@ var AuthorizationCodeClient = class {
   }
 };
 
-// node_modules/@azure/msal-common/dist/client/RefreshTokenClient.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/client/RefreshTokenClient.mjs
 var DEFAULT_REFRESH_TOKEN_EXPIRATION_OFFSET_SECONDS = 300;
 var RefreshTokenClient = class {
   constructor(configuration, performanceClient) {
@@ -37357,9 +37384,6 @@ var RefreshTokenClient = class {
         throw createClientConfigurationError(missingSshJwk);
       }
     }
-    if (!StringUtils.isEmptyObj(request5.claims) || this.config.authOptions.clientCapabilities && this.config.authOptions.clientCapabilities.length > 0) {
-      addClaims(parameters, request5.claims, this.config.authOptions.clientCapabilities);
-    }
     if (this.config.systemOptions.preventCorsPreflight && request5.ccsCredential) {
       switch (request5.ccsCredential.type) {
         case CcsCredentialType.HOME_ACCOUNT_ID:
@@ -37384,11 +37408,12 @@ var RefreshTokenClient = class {
       });
     }
     instrumentBrokerParams(parameters, request5.correlationId, this.performanceClient);
+    addClaims(parameters, request5.claims, this.config.authOptions.clientCapabilities, request5.skipBrokerClaims);
     return mapToQueryString(parameters);
   }
 };
 
-// node_modules/@azure/msal-common/dist/client/SilentFlowClient.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/client/SilentFlowClient.mjs
 var SilentFlowClient = class {
   constructor(configuration, performanceClient) {
     this.config = buildClientConfiguration(configuration);
@@ -37476,7 +37501,7 @@ var SilentFlowClient = class {
   }
 };
 
-// node_modules/@azure/msal-common/dist/protocol/Authorize.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/protocol/Authorize.mjs
 var Authorize_exports = {};
 __export(Authorize_exports, {
   getAuthorizationCodePayload: () => getAuthorizationCodePayload,
@@ -37484,7 +37509,7 @@ __export(Authorize_exports, {
   getStandardAuthorizeRequestParameters: () => getStandardAuthorizeRequestParameters,
   validateAuthorizationResponse: () => validateAuthorizationResponse
 });
-function getStandardAuthorizeRequestParameters(authOptions, request5, logger31, performanceClient) {
+function getStandardAuthorizeRequestParameters(authOptions, request5, logger30, performanceClient) {
   const correlationId = request5.correlationId;
   const parameters = /* @__PURE__ */ new Map();
   addClientId(parameters, request5.embeddedClientId || request5.extraQueryParameters?.[CLIENT_ID] || authOptions.clientId);
@@ -37509,60 +37534,60 @@ function getStandardAuthorizeRequestParameters(authOptions, request5, logger31, 
   }
   if (request5.prompt !== PromptValue.SELECT_ACCOUNT) {
     if (request5.sid && request5.prompt === PromptValue.NONE) {
-      logger31.verbose("createAuthCodeUrlQueryString: Prompt is none, adding sid from request", request5.correlationId);
+      logger30.verbose("createAuthCodeUrlQueryString: Prompt is none, adding sid from request", request5.correlationId);
       addSid(parameters, request5.sid);
       performanceClient?.addFields({ sidFromRequest: true }, correlationId);
     } else if (request5.account) {
       const accountSid = extractAccountSid(request5.account);
       let accountLoginHintClaim = extractLoginHint(request5.account);
       if (accountLoginHintClaim && request5.domainHint) {
-        logger31.warning(`AuthorizationCodeClient.createAuthCodeUrlQueryString: "domainHint" param is set, skipping opaque "login_hint" claim. Please consider not passing domainHint`, request5.correlationId);
+        logger30.warning(`AuthorizationCodeClient.createAuthCodeUrlQueryString: "domainHint" param is set, skipping opaque "login_hint" claim. Please consider not passing domainHint`, request5.correlationId);
         accountLoginHintClaim = null;
       }
       if (accountLoginHintClaim) {
-        logger31.verbose("createAuthCodeUrlQueryString: login_hint claim present on account", request5.correlationId);
+        logger30.verbose("createAuthCodeUrlQueryString: login_hint claim present on account", request5.correlationId);
         addLoginHint(parameters, accountLoginHintClaim);
         performanceClient?.addFields({ loginHintFromClaim: true }, correlationId);
         try {
           const clientInfo = buildClientInfoFromHomeAccountId(request5.account.homeAccountId);
           addCcsOid(parameters, clientInfo);
         } catch (e) {
-          logger31.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header", request5.correlationId);
+          logger30.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header", request5.correlationId);
         }
       } else if (accountSid && request5.prompt === PromptValue.NONE) {
-        logger31.verbose("createAuthCodeUrlQueryString: Prompt is none, adding sid from account", request5.correlationId);
+        logger30.verbose("createAuthCodeUrlQueryString: Prompt is none, adding sid from account", request5.correlationId);
         addSid(parameters, accountSid);
         performanceClient?.addFields({ sidFromClaim: true }, correlationId);
         try {
           const clientInfo = buildClientInfoFromHomeAccountId(request5.account.homeAccountId);
           addCcsOid(parameters, clientInfo);
         } catch (e) {
-          logger31.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header", request5.correlationId);
+          logger30.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header", request5.correlationId);
         }
       } else if (request5.loginHint) {
-        logger31.verbose("createAuthCodeUrlQueryString: Adding login_hint from request", request5.correlationId);
+        logger30.verbose("createAuthCodeUrlQueryString: Adding login_hint from request", request5.correlationId);
         addLoginHint(parameters, request5.loginHint);
         addCcsUpn(parameters, request5.loginHint);
         performanceClient?.addFields({ loginHintFromRequest: true }, correlationId);
       } else if (request5.account.username) {
-        logger31.verbose("createAuthCodeUrlQueryString: Adding login_hint from account", request5.correlationId);
+        logger30.verbose("createAuthCodeUrlQueryString: Adding login_hint from account", request5.correlationId);
         addLoginHint(parameters, request5.account.username);
         performanceClient?.addFields({ loginHintFromUpn: true }, correlationId);
         try {
           const clientInfo = buildClientInfoFromHomeAccountId(request5.account.homeAccountId);
           addCcsOid(parameters, clientInfo);
         } catch (e) {
-          logger31.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header", request5.correlationId);
+          logger30.verbose("createAuthCodeUrlQueryString: Could not parse home account ID for CCS Header", request5.correlationId);
         }
       }
     } else if (request5.loginHint) {
-      logger31.verbose("createAuthCodeUrlQueryString: No account, adding login_hint from request", request5.correlationId);
+      logger30.verbose("createAuthCodeUrlQueryString: No account, adding login_hint from request", request5.correlationId);
       addLoginHint(parameters, request5.loginHint);
       addCcsUpn(parameters, request5.loginHint);
       performanceClient?.addFields({ loginHintFromRequest: true }, correlationId);
     }
   } else {
-    logger31.verbose("createAuthCodeUrlQueryString: Prompt is select_account, ignoring account hints", request5.correlationId);
+    logger30.verbose("createAuthCodeUrlQueryString: Prompt is select_account, ignoring account hints", request5.correlationId);
   }
   if (request5.nonce) {
     addNonce(parameters, request5.nonce);
@@ -37570,12 +37595,10 @@ function getStandardAuthorizeRequestParameters(authOptions, request5, logger31, 
   if (request5.state) {
     addState(parameters, request5.state);
   }
-  if (request5.claims || authOptions.clientCapabilities && authOptions.clientCapabilities.length > 0) {
-    addClaims(parameters, request5.claims, authOptions.clientCapabilities);
-  }
   if (request5.embeddedClientId) {
     addBrokerParameters(parameters, authOptions.clientId, authOptions.redirectUri);
   }
+  addClaims(parameters, request5.claims, authOptions.clientCapabilities, request5.skipBrokerClaims);
   if (authOptions.instanceAware && (!request5.extraQueryParameters || !Object.keys(request5.extraQueryParameters).includes(INSTANCE_AWARE))) {
     addInstanceAware(parameters);
   }
@@ -37631,7 +37654,7 @@ function extractLoginHint(account) {
   return account.loginHint || account.idTokenClaims?.login_hint || null;
 }
 
-// node_modules/@azure/msal-common/dist/request/BaseAuthRequest.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/request/BaseAuthRequest.mjs
 function enforceResourceParameter(isMcp, request5) {
   if (!isMcp) {
     return;
@@ -37650,7 +37673,7 @@ function containsResourceParam(params) {
   return Object.prototype.hasOwnProperty.call(params, "resource");
 }
 
-// node_modules/@azure/msal-common/dist/error/AuthErrorCodes.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/error/AuthErrorCodes.mjs
 var AuthErrorCodes_exports = {};
 __export(AuthErrorCodes_exports, {
   postRequestFailed: () => postRequestFailed,
@@ -37659,7 +37682,7 @@ __export(AuthErrorCodes_exports, {
 var unexpectedError = "unexpected_error";
 var postRequestFailed = "post_request_failed";
 
-// node_modules/@azure/msal-common/dist/telemetry/server/ServerTelemetryManager.mjs
+// node_modules/@azure/msal-node/node_modules/@azure/msal-common/dist/telemetry/server/ServerTelemetryManager.mjs
 var skuGroupSeparator = ",";
 var skuValueSeparator = "|";
 function makeExtraSkuString(params) {
@@ -38529,67 +38552,15 @@ function buildManagedIdentityConfiguration({ clientCapabilities, managedIdentity
   };
 }
 
-// node_modules/uuid/dist/esm-node/rng.js
-var import_crypto = __toESM(require("crypto"));
-var rnds8Pool = new Uint8Array(256);
-var poolPtr = rnds8Pool.length;
-function rng() {
-  if (poolPtr > rnds8Pool.length - 16) {
-    import_crypto.default.randomFillSync(rnds8Pool);
-    poolPtr = 0;
-  }
-  return rnds8Pool.slice(poolPtr, poolPtr += 16);
-}
-
-// node_modules/uuid/dist/esm-node/regex.js
-var regex_default = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i;
-
-// node_modules/uuid/dist/esm-node/validate.js
-function validate(uuid) {
-  return typeof uuid === "string" && regex_default.test(uuid);
-}
-var validate_default = validate;
-
-// node_modules/uuid/dist/esm-node/stringify.js
-var byteToHex = [];
-for (let i = 0; i < 256; ++i) {
-  byteToHex.push((i + 256).toString(16).substr(1));
-}
-function stringify(arr, offset = 0) {
-  const uuid = (byteToHex[arr[offset + 0]] + byteToHex[arr[offset + 1]] + byteToHex[arr[offset + 2]] + byteToHex[arr[offset + 3]] + "-" + byteToHex[arr[offset + 4]] + byteToHex[arr[offset + 5]] + "-" + byteToHex[arr[offset + 6]] + byteToHex[arr[offset + 7]] + "-" + byteToHex[arr[offset + 8]] + byteToHex[arr[offset + 9]] + "-" + byteToHex[arr[offset + 10]] + byteToHex[arr[offset + 11]] + byteToHex[arr[offset + 12]] + byteToHex[arr[offset + 13]] + byteToHex[arr[offset + 14]] + byteToHex[arr[offset + 15]]).toLowerCase();
-  if (!validate_default(uuid)) {
-    throw TypeError("Stringified UUID is invalid");
-  }
-  return uuid;
-}
-var stringify_default = stringify;
-
-// node_modules/uuid/dist/esm-node/v4.js
-function v4(options, buf, offset) {
-  options = options || {};
-  const rnds = options.random || (options.rng || rng)();
-  rnds[6] = rnds[6] & 15 | 64;
-  rnds[8] = rnds[8] & 63 | 128;
-  if (buf) {
-    offset = offset || 0;
-    for (let i = 0; i < 16; ++i) {
-      buf[offset + i] = rnds[i];
-    }
-    return buf;
-  }
-  return stringify_default(rnds);
-}
-var v4_default = v4;
-
 // node_modules/@azure/msal-node/dist/crypto/GuidGenerator.mjs
+var import_node_crypto = require("crypto");
 var GuidGenerator = class {
   /**
-   *
-   * RFC4122: The version 4 UUID is meant for generating UUIDs from truly-random or pseudo-random numbers.
-   * uuidv4 generates guids from cryprtographically-string random
+   * Generates a random [RFC 4122](https://www.rfc-editor.org/rfc/rfc4122.txt) version 4 UUID. The UUID is generated using a
+   * cryptographic pseudorandom number generator.
    */
   generateGuid() {
-    return v4_default();
+    return (0, import_node_crypto.randomUUID)();
   }
   /**
    * verifies if a string is  GUID
@@ -38641,19 +38612,19 @@ var EncodingUtils = class _EncodingUtils {
 };
 
 // node_modules/@azure/msal-node/dist/crypto/HashUtils.mjs
-var import_crypto2 = __toESM(require("crypto"), 1);
+var import_crypto = __toESM(require("crypto"), 1);
 var HashUtils = class {
   /**
    * generate 'SHA256' hash
    * @param buffer
    */
   sha256(buffer) {
-    return import_crypto2.default.createHash(Hash.SHA256).update(buffer).digest();
+    return import_crypto.default.createHash(Hash.SHA256).update(buffer).digest();
   }
 };
 
 // node_modules/@azure/msal-node/dist/crypto/PkceGenerator.mjs
-var import_crypto3 = __toESM(require("crypto"), 1);
+var import_crypto2 = __toESM(require("crypto"), 1);
 var PkceGenerator = class {
   constructor() {
     this.hashUtils = new HashUtils();
@@ -38674,7 +38645,7 @@ var PkceGenerator = class {
     const charArr = [];
     const maxNumber = 256 - 256 % CharSet.CV_CHARSET.length;
     while (charArr.length <= RANDOM_OCTET_SIZE) {
-      const byte = import_crypto3.default.randomBytes(1)[0];
+      const byte = import_crypto2.default.randomBytes(1)[0];
       if (byte >= maxNumber) {
         continue;
       }
@@ -38801,11 +38772,11 @@ function generateAccountKey(account) {
 
 // node_modules/@azure/msal-node/dist/cache/NodeStorage.mjs
 var NodeStorage = class extends CacheManager {
-  constructor(logger31, clientId, cryptoImpl, staticAuthorityOptions) {
-    super(clientId, cryptoImpl, logger31, new StubPerformanceClient(), staticAuthorityOptions);
+  constructor(logger30, clientId, cryptoImpl, staticAuthorityOptions) {
+    super(clientId, cryptoImpl, logger30, new StubPerformanceClient(), staticAuthorityOptions);
     this.cache = {};
     this.changeEmitters = [];
-    this.logger = logger31;
+    this.logger = logger30;
   }
   /**
    * Queue up callbacks
@@ -39143,12 +39114,15 @@ var NodeStorage = class extends CacheManager {
     return [...Object.keys(cache)];
   }
   /**
-   * Clears all cache entries created by MSAL (except tokens).
+   * Clears all cache entries created by MSAL except authority metadata..
    */
   clear() {
     this.logger.trace("Clearing cache entries created by MSAL", "");
     const cacheKeys = this.getKeys();
     cacheKeys.forEach((key) => {
+      if (this.isAuthorityMetadata(key)) {
+        return;
+      }
       this.removeItem(key);
     });
     this.emitChange();
@@ -39196,14 +39170,14 @@ var defaultSerializedCache = {
   AppMetadata: {}
 };
 var TokenCache = class {
-  constructor(storage, logger31, cachePlugin) {
+  constructor(storage, logger30, cachePlugin) {
     this.cacheHasChanged = false;
     this.storage = storage;
     this.storage.registerChangeEmitter(this.handleChangeEvent.bind(this));
     if (cachePlugin) {
       this.persistence = cachePlugin;
     }
-    this.logger = logger31;
+    this.logger = logger30;
   }
   /**
    * Set to true if cache state has changed since last time serialize or writeToPersistence was called
@@ -39573,7 +39547,7 @@ var ClientAssertion = class _ClientAssertion {
 
 // node_modules/@azure/msal-node/dist/packageMetadata.mjs
 var name2 = "@azure/msal-node";
-var version2 = "5.1.1";
+var version2 = "5.1.5";
 
 // node_modules/@azure/msal-node/dist/client/BaseClient.mjs
 var BaseClient = class {
@@ -39707,12 +39681,12 @@ var UsernamePasswordClient = class extends BaseClient {
 };
 
 // node_modules/@azure/msal-node/dist/protocol/Authorize.mjs
-function getAuthCodeRequestUrl(config, authority, request5, logger31) {
+function getAuthCodeRequestUrl(config, authority, request5, logger30) {
   const parameters = Authorize_exports.getStandardAuthorizeRequestParameters({
     ...config.auth,
     authority,
     redirectUri: request5.redirectUri || ""
-  }, request5, logger31);
+  }, request5, logger30);
   RequestParameterBuilder_exports.addLibraryInfo(parameters, {
     sku: Constants.MSAL_SKU,
     version: version2,
@@ -39947,8 +39921,8 @@ var ClientApplication = class {
    * Replaces the default logger set in configurations with new Logger with new configurations
    * @param logger - Logger instance
    */
-  setLogger(logger31) {
-    this.logger = logger31;
+  setLogger(logger30) {
+    this.logger = logger30;
   }
   /**
    * Builds the common configuration to be passed to the common component based on the platform configurarion
@@ -40056,7 +40030,7 @@ var ClientApplication = class {
     return AuthorityFactory_exports.createDiscoveredInstance(authorityUrl, this.config.system.networkClient, this.storage, authorityOptions, this.logger, requestCorrelationId, new StubPerformanceClient());
   }
   /**
-   * Clear the cache
+   * Clear the cache except for authority metadata.
    */
   clearCache() {
     this.storage.clear();
@@ -41067,10 +41041,10 @@ function isIso8601(dateString) {
 
 // node_modules/@azure/msal-node/dist/network/HttpClientWithRetries.mjs
 var HttpClientWithRetries = class {
-  constructor(httpClientNoRetries, retryPolicy3, logger31) {
+  constructor(httpClientNoRetries, retryPolicy3, logger30) {
     this.httpClientNoRetries = httpClientNoRetries;
     this.retryPolicy = retryPolicy3;
-    this.logger = logger31;
+    this.logger = logger30;
   }
   async sendNetworkRequestAsyncHelper(httpMethod, url, options) {
     if (httpMethod === HttpMethod2.GET) {
@@ -41117,8 +41091,8 @@ var BaseManagedIdentitySource = class {
    * @param cryptoProvider - Cryptographic provider for token operations
    * @param disableInternalRetries - Whether to disable automatic retry logic
    */
-  constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
-    this.logger = logger31;
+  constructor(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
+    this.logger = logger30;
     this.nodeStorage = nodeStorage;
     this.networkClient = networkClient;
     this.cryptoProvider = cryptoProvider;
@@ -41259,11 +41233,11 @@ var BaseManagedIdentitySource = class {
     }
   }
 };
-BaseManagedIdentitySource.getValidatedEnvVariableUrlString = (envVariableStringName, envVariable, sourceName, logger31) => {
+BaseManagedIdentitySource.getValidatedEnvVariableUrlString = (envVariableStringName, envVariable, sourceName, logger30) => {
   try {
     return new UrlString(envVariable).urlString;
   } catch (error2) {
-    logger31.info(`[Managed Identity] ${sourceName} managed identity is unavailable because the '${envVariableStringName}' environment variable is malformed.`, "");
+    logger30.info(`[Managed Identity] ${sourceName} managed identity is unavailable because the '${envVariableStringName}' environment variable is malformed.`, "");
     throw createManagedIdentityError(MsiEnvironmentVariableUrlMalformedErrorCodes[envVariableStringName]);
   }
 };
@@ -41312,10 +41286,10 @@ var DefaultManagedIdentityRetryPolicy = class _DefaultManagedIdentityRetryPolicy
   static get DEFAULT_MANAGED_IDENTITY_RETRY_DELAY_MS() {
     return DEFAULT_MANAGED_IDENTITY_RETRY_DELAY_MS;
   }
-  async pauseForRetry(httpStatusCode, currentRetry, logger31, retryAfterHeader) {
+  async pauseForRetry(httpStatusCode, currentRetry, logger30, retryAfterHeader) {
     if (DEFAULT_MANAGED_IDENTITY_HTTP_STATUS_CODES_TO_RETRY_ON.includes(httpStatusCode) && currentRetry < DEFAULT_MANAGED_IDENTITY_MAX_RETRIES) {
       const retryAfterDelay = this.linearRetryStrategy.calculateDelay(retryAfterHeader, _DefaultManagedIdentityRetryPolicy.DEFAULT_MANAGED_IDENTITY_RETRY_DELAY_MS);
-      logger31.verbose(`Retrying request in ${retryAfterDelay}ms (retry attempt: ${currentRetry + 1})`, "");
+      logger30.verbose(`Retrying request in ${retryAfterDelay}ms (retry attempt: ${currentRetry + 1})`, "");
       await new Promise((resolve) => {
         return setTimeout(resolve, retryAfterDelay);
       });
@@ -41366,8 +41340,8 @@ var AppService = class _AppService extends BaseManagedIdentitySource {
    * @param identityEndpoint - The App Service identity endpoint URL
    * @param identityHeader - The secret header value required for authentication
    */
-  constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader) {
-    super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
+  constructor(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader) {
+    super(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.identityEndpoint = identityEndpoint;
     this.identityHeader = identityHeader;
   }
@@ -41401,15 +41375,15 @@ var AppService = class _AppService extends BaseManagedIdentitySource {
    *
    * @returns A new AppService instance if the environment is suitable, null otherwise
    */
-  static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
+  static tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
     const [identityEndpoint, identityHeader] = _AppService.getEnvironmentVariables();
     if (!identityEndpoint || !identityHeader) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.APP_SERVICE} managed identity is unavailable because one or both of the '${ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER}' and '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' environment variables are not defined.`, "");
+      logger30.info(`[Managed Identity] ${ManagedIdentitySourceNames.APP_SERVICE} managed identity is unavailable because one or both of the '${ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER}' and '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' environment variables are not defined.`, "");
       return null;
     }
-    const validatedIdentityEndpoint = _AppService.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT, identityEndpoint, ManagedIdentitySourceNames.APP_SERVICE, logger31);
-    logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.APP_SERVICE} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.APP_SERVICE} managed identity.`, "");
-    return new _AppService(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader);
+    const validatedIdentityEndpoint = _AppService.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT, identityEndpoint, ManagedIdentitySourceNames.APP_SERVICE, logger30);
+    logger30.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.APP_SERVICE} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.APP_SERVICE} managed identity.`, "");
+    return new _AppService(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader);
   }
   /**
    * Creates a managed identity token request for the App Service environment.
@@ -41460,8 +41434,8 @@ var AzureArc = class _AzureArc extends BaseManagedIdentitySource {
    * @param disableInternalRetries - Flag to disable automatic retry logic for failed requests
    * @param identityEndpoint - The Azure Arc identity endpoint URL for token requests
    */
-  constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint) {
-    super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
+  constructor(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint) {
+    super(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.identityEndpoint = identityEndpoint;
   }
   /**
@@ -41508,24 +41482,24 @@ var AzureArc = class _AzureArc extends BaseManagedIdentitySource {
    *
    * @throws {ManagedIdentityError} When a user-assigned managed identity is specified (not supported for Azure Arc)
    */
-  static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
+  static tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
     const [identityEndpoint, imdsEndpoint] = _AzureArc.getEnvironmentVariables();
     if (!identityEndpoint || !imdsEndpoint) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is unavailable through environment variables because one or both of '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' and '${ManagedIdentityEnvironmentVariableNames.IMDS_ENDPOINT}' are not defined. ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is also unavailable through file detection.`, "");
+      logger30.info(`[Managed Identity] ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is unavailable through environment variables because one or both of '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' and '${ManagedIdentityEnvironmentVariableNames.IMDS_ENDPOINT}' are not defined. ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is also unavailable through file detection.`, "");
       return null;
     }
     if (imdsEndpoint === HIMDS_EXECUTABLE_HELPER_STRING) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is available through file detection. Defaulting to known ${ManagedIdentitySourceNames.AZURE_ARC} endpoint: ${DEFAULT_AZURE_ARC_IDENTITY_ENDPOINT}. Creating ${ManagedIdentitySourceNames.AZURE_ARC} managed identity.`, "");
+      logger30.info(`[Managed Identity] ${ManagedIdentitySourceNames.AZURE_ARC} managed identity is available through file detection. Defaulting to known ${ManagedIdentitySourceNames.AZURE_ARC} endpoint: ${DEFAULT_AZURE_ARC_IDENTITY_ENDPOINT}. Creating ${ManagedIdentitySourceNames.AZURE_ARC} managed identity.`, "");
     } else {
-      const validatedIdentityEndpoint = _AzureArc.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT, identityEndpoint, ManagedIdentitySourceNames.AZURE_ARC, logger31);
+      const validatedIdentityEndpoint = _AzureArc.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT, identityEndpoint, ManagedIdentitySourceNames.AZURE_ARC, logger30);
       validatedIdentityEndpoint.endsWith("/") ? validatedIdentityEndpoint.slice(0, -1) : validatedIdentityEndpoint;
-      _AzureArc.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IMDS_ENDPOINT, imdsEndpoint, ManagedIdentitySourceNames.AZURE_ARC, logger31);
-      logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.AZURE_ARC} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.AZURE_ARC} managed identity.`, "");
+      _AzureArc.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IMDS_ENDPOINT, imdsEndpoint, ManagedIdentitySourceNames.AZURE_ARC, logger30);
+      logger30.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.AZURE_ARC} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.AZURE_ARC} managed identity.`, "");
     }
     if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
       throw createManagedIdentityError(unableToCreateAzureArc);
     }
-    return new _AzureArc(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint);
+    return new _AzureArc(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint);
   }
   /**
    * Creates a properly formatted HTTP request for acquiring tokens from the Azure Arc identity endpoint.
@@ -41635,8 +41609,8 @@ var CloudShell = class _CloudShell extends BaseManagedIdentitySource {
    * @param disableInternalRetries - Whether to disable automatic retry logic for failed requests
    * @param msiEndpoint - The MSI endpoint URL obtained from environment variables
    */
-  constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint) {
-    super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
+  constructor(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint) {
+    super(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.msiEndpoint = msiEndpoint;
   }
   /**
@@ -41670,18 +41644,18 @@ var CloudShell = class _CloudShell extends BaseManagedIdentitySource {
    * @throws {ManagedIdentityError} When a user-assigned managed identity is requested,
    *         as Cloud Shell only supports system-assigned identities
    */
-  static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
+  static tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
     const [msiEndpoint] = _CloudShell.getEnvironmentVariables();
     if (!msiEndpoint) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity is unavailable because the '${ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT} environment variable is not defined.`, "");
+      logger30.info(`[Managed Identity] ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity is unavailable because the '${ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT} environment variable is not defined.`, "");
       return null;
     }
-    const validatedMsiEndpoint = _CloudShell.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT, msiEndpoint, ManagedIdentitySourceNames.CLOUD_SHELL, logger31);
-    logger31.info(`[Managed Identity] Environment variable validation passed for ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity. Endpoint URI: ${validatedMsiEndpoint}. Creating ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity.`, "");
+    const validatedMsiEndpoint = _CloudShell.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT, msiEndpoint, ManagedIdentitySourceNames.CLOUD_SHELL, logger30);
+    logger30.info(`[Managed Identity] Environment variable validation passed for ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity. Endpoint URI: ${validatedMsiEndpoint}. Creating ${ManagedIdentitySourceNames.CLOUD_SHELL} managed identity.`, "");
     if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
       throw createManagedIdentityError(unableToCreateCloudShell);
     }
-    return new _CloudShell(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint);
+    return new _CloudShell(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint);
   }
   /**
    * Creates an HTTP request to acquire an access token from the Cloud Shell managed identity endpoint.
@@ -41777,14 +41751,14 @@ var ImdsRetryPolicy = class _ImdsRetryPolicy {
    * @param retryAfterHeader - The value of the "retry-after" header from the response.
    * @returns A promise that resolves to a boolean indicating whether a retry should be attempted.
    */
-  async pauseForRetry(httpStatusCode, currentRetry, logger31) {
+  async pauseForRetry(httpStatusCode, currentRetry, logger30) {
     if (this._isNewRequest) {
       this._isNewRequest = false;
       this.maxRetries = httpStatusCode === Constants_exports.HTTP_GONE ? LINEAR_STRATEGY_NUM_RETRIES : EXPONENTIAL_STRATEGY_NUM_RETRIES;
     }
     if ((HTTP_STATUS_400_CODES_FOR_EXPONENTIAL_STRATEGY.includes(httpStatusCode) || httpStatusCode >= Constants_exports.HTTP_SERVER_ERROR_RANGE_START && httpStatusCode <= Constants_exports.HTTP_SERVER_ERROR_RANGE_END && currentRetry < this.maxRetries) && currentRetry < this.maxRetries) {
       const retryAfterDelay = httpStatusCode === Constants_exports.HTTP_GONE ? _ImdsRetryPolicy.HTTP_STATUS_GONE_RETRY_AFTER_MS : this.exponentialRetryStrategy.calculateDelay(currentRetry);
-      logger31.verbose(`Retrying request in ${retryAfterDelay}ms (retry attempt: ${currentRetry + 1})`, "");
+      logger30.verbose(`Retrying request in ${retryAfterDelay}ms (retry attempt: ${currentRetry + 1})`, "");
       await new Promise((resolve) => {
         return setTimeout(resolve, retryAfterDelay);
       });
@@ -41809,8 +41783,8 @@ var Imds = class _Imds extends BaseManagedIdentitySource {
    * @param disableInternalRetries - When true, disables the built-in retry logic for IMDS requests
    * @param identityEndpoint - The complete IMDS endpoint URL including the token path
    */
-  constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint) {
-    super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
+  constructor(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint) {
+    super(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.identityEndpoint = identityEndpoint;
   }
   /**
@@ -41829,16 +41803,16 @@ var Imds = class _Imds extends BaseManagedIdentitySource {
    *
    * @returns A configured Imds instance ready to make token requests
    */
-  static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
+  static tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
     let validatedIdentityEndpoint;
     if (process.env[ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST]) {
-      logger31.info(`[Managed Identity] Environment variable ${ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST} for ${ManagedIdentitySourceNames.IMDS} returned endpoint: ${process.env[ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST]}`, "");
-      validatedIdentityEndpoint = _Imds.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST, `${process.env[ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST]}${IMDS_TOKEN_PATH}`, ManagedIdentitySourceNames.IMDS, logger31);
+      logger30.info(`[Managed Identity] Environment variable ${ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST} for ${ManagedIdentitySourceNames.IMDS} returned endpoint: ${process.env[ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST]}`, "");
+      validatedIdentityEndpoint = _Imds.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST, `${process.env[ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST]}${IMDS_TOKEN_PATH}`, ManagedIdentitySourceNames.IMDS, logger30);
     } else {
-      logger31.info(`[Managed Identity] Unable to find ${ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST} environment variable for ${ManagedIdentitySourceNames.IMDS}, using the default endpoint.`, "");
+      logger30.info(`[Managed Identity] Unable to find ${ManagedIdentityEnvironmentVariableNames.AZURE_POD_IDENTITY_AUTHORITY_HOST} environment variable for ${ManagedIdentitySourceNames.IMDS}, using the default endpoint.`, "");
       validatedIdentityEndpoint = DEFAULT_IMDS_ENDPOINT;
     }
-    return new _Imds(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, validatedIdentityEndpoint);
+    return new _Imds(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, validatedIdentityEndpoint);
   }
   /**
    * Creates a properly configured HTTP request for acquiring an access token from IMDS.
@@ -41894,8 +41868,8 @@ var ServiceFabric = class _ServiceFabric extends BaseManagedIdentitySource {
    * @param identityEndpoint - The Service Fabric managed identity endpoint URL
    * @param identityHeader - The Service Fabric managed identity secret header value
    */
-  constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader) {
-    super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
+  constructor(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader) {
+    super(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.identityEndpoint = identityEndpoint;
     this.identityHeader = identityHeader;
   }
@@ -41936,18 +41910,18 @@ var ServiceFabric = class _ServiceFabric extends BaseManagedIdentitySource {
    *
    * @returns A ServiceFabric instance if all environment variables are valid and present, otherwise null
    */
-  static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
+  static tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
     const [identityEndpoint, identityHeader, identityServerThumbprint] = _ServiceFabric.getEnvironmentVariables();
     if (!identityEndpoint || !identityHeader || !identityServerThumbprint) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity is unavailable because one or all of the '${ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER}', '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' or '${ManagedIdentityEnvironmentVariableNames.IDENTITY_SERVER_THUMBPRINT}' environment variables are not defined.`, "");
+      logger30.info(`[Managed Identity] ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity is unavailable because one or all of the '${ManagedIdentityEnvironmentVariableNames.IDENTITY_HEADER}', '${ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT}' or '${ManagedIdentityEnvironmentVariableNames.IDENTITY_SERVER_THUMBPRINT}' environment variables are not defined.`, "");
       return null;
     }
-    const validatedIdentityEndpoint = _ServiceFabric.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT, identityEndpoint, ManagedIdentitySourceNames.SERVICE_FABRIC, logger31);
-    logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity.`, "");
+    const validatedIdentityEndpoint = _ServiceFabric.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.IDENTITY_ENDPOINT, identityEndpoint, ManagedIdentitySourceNames.SERVICE_FABRIC, logger30);
+    logger30.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity. Endpoint URI: ${validatedIdentityEndpoint}. Creating ${ManagedIdentitySourceNames.SERVICE_FABRIC} managed identity.`, "");
     if (managedIdentityId.idType !== ManagedIdentityIdType.SYSTEM_ASSIGNED) {
-      logger31.warning(`[Managed Identity] ${ManagedIdentitySourceNames.SERVICE_FABRIC} user assigned managed identity is configured in the cluster, not during runtime. See also: https://learn.microsoft.com/en-us/azure/service-fabric/configure-existing-cluster-enable-managed-identity-token-service.`, "");
+      logger30.warning(`[Managed Identity] ${ManagedIdentitySourceNames.SERVICE_FABRIC} user assigned managed identity is configured in the cluster, not during runtime. See also: https://learn.microsoft.com/en-us/azure/service-fabric/configure-existing-cluster-enable-managed-identity-token-service.`, "");
     }
-    return new _ServiceFabric(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader);
+    return new _ServiceFabric(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, identityEndpoint, identityHeader);
   }
   /**
    * Creates HTTP request parameters for acquiring an access token from the Service Fabric Managed Identity Token Service (MITS).
@@ -41994,8 +41968,8 @@ var MachineLearning = class _MachineLearning extends BaseManagedIdentitySource {
    * @param msiEndpoint - The MSI endpoint URL from environment variables
    * @param secret - The MSI secret from environment variables
    */
-  constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint, secret) {
-    super(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
+  constructor(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint, secret) {
+    super(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     this.msiEndpoint = msiEndpoint;
     this.secret = secret;
   }
@@ -42031,15 +42005,15 @@ var MachineLearning = class _MachineLearning extends BaseManagedIdentitySource {
    *
    * @returns A new MachineLearning instance if the environment is valid, null otherwise
    */
-  static tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
+  static tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
     const [msiEndpoint, secret] = _MachineLearning.getEnvironmentVariables();
     if (!msiEndpoint || !secret) {
-      logger31.info(`[Managed Identity] ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity is unavailable because one or both of the '${ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT}' and '${ManagedIdentityEnvironmentVariableNames.MSI_SECRET}' environment variables are not defined.`, "");
+      logger30.info(`[Managed Identity] ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity is unavailable because one or both of the '${ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT}' and '${ManagedIdentityEnvironmentVariableNames.MSI_SECRET}' environment variables are not defined.`, "");
       return null;
     }
-    const validatedMsiEndpoint = _MachineLearning.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT, msiEndpoint, ManagedIdentitySourceNames.MACHINE_LEARNING, logger31);
-    logger31.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity. Endpoint URI: ${validatedMsiEndpoint}. Creating ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity.`, "");
-    return new _MachineLearning(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint, secret);
+    const validatedMsiEndpoint = _MachineLearning.getValidatedEnvVariableUrlString(ManagedIdentityEnvironmentVariableNames.MSI_ENDPOINT, msiEndpoint, ManagedIdentitySourceNames.MACHINE_LEARNING, logger30);
+    logger30.info(`[Managed Identity] Environment variables validation passed for ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity. Endpoint URI: ${validatedMsiEndpoint}. Creating ${ManagedIdentitySourceNames.MACHINE_LEARNING} managed identity.`, "");
+    return new _MachineLearning(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, msiEndpoint, secret);
   }
   /**
    * Creates a managed identity token request for Azure Machine Learning environments.
@@ -42086,8 +42060,8 @@ var MachineLearning = class _MachineLearning extends BaseManagedIdentitySource {
 
 // node_modules/@azure/msal-node/dist/client/ManagedIdentityClient.mjs
 var ManagedIdentityClient = class _ManagedIdentityClient {
-  constructor(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
-    this.logger = logger31;
+  constructor(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) {
+    this.logger = logger30;
     this.nodeStorage = nodeStorage;
     this.networkClient = networkClient;
     this.cryptoProvider = cryptoProvider;
@@ -42116,8 +42090,8 @@ var ManagedIdentityClient = class _ManagedIdentityClient {
    * Tries to create a managed identity source for all sources
    * @returns the managed identity Source
    */
-  selectManagedIdentitySource(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
-    const source = ServiceFabric.tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) || AppService.tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) || MachineLearning.tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) || CloudShell.tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) || AzureArc.tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) || Imds.tryCreate(logger31, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
+  selectManagedIdentitySource(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) {
+    const source = ServiceFabric.tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) || AppService.tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) || MachineLearning.tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries) || CloudShell.tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) || AzureArc.tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries, managedIdentityId) || Imds.tryCreate(logger30, nodeStorage, networkClient, cryptoProvider, disableInternalRetries);
     if (!source) {
       throw createManagedIdentityError(unableToCreateSource);
     }
@@ -42389,10 +42363,10 @@ function objectHasProperty(thing, property) {
 }
 
 // node_modules/@azure/core-util/dist/esm/uuidUtils.js
-var import_crypto4 = require("crypto");
+var import_crypto3 = require("crypto");
 var _a;
-var uuidFunction = typeof ((_a = globalThis === null || globalThis === void 0 ? void 0 : globalThis.crypto) === null || _a === void 0 ? void 0 : _a.randomUUID) === "function" ? globalThis.crypto.randomUUID.bind(globalThis.crypto) : import_crypto4.randomUUID;
-function randomUUID2() {
+var uuidFunction = typeof ((_a = globalThis === null || globalThis === void 0 ? void 0 : globalThis.crypto) === null || _a === void 0 ? void 0 : _a.randomUUID) === "function" ? globalThis.crypto.randomUUID.bind(globalThis.crypto) : import_crypto3.randomUUID;
+function randomUUID3() {
   return uuidFunction();
 }
 
@@ -42934,7 +42908,7 @@ var Sanitizer = class {
 var logPolicyName = "logPolicy";
 function logPolicy(options = {}) {
   var _a5;
-  const logger31 = (_a5 = options.logger) !== null && _a5 !== void 0 ? _a5 : logger4.info;
+  const logger30 = (_a5 = options.logger) !== null && _a5 !== void 0 ? _a5 : logger4.info;
   const sanitizer = new Sanitizer({
     additionalAllowedHeaderNames: options.additionalAllowedHeaderNames,
     additionalAllowedQueryParameters: options.additionalAllowedQueryParameters
@@ -42942,13 +42916,13 @@ function logPolicy(options = {}) {
   return {
     name: logPolicyName,
     async sendRequest(request5, next) {
-      if (!logger31.enabled) {
+      if (!logger30.enabled) {
         return next(request5);
       }
-      logger31(`Request: ${sanitizer.sanitize(request5)}`);
+      logger30(`Request: ${sanitizer.sanitize(request5)}`);
       const response = await next(request5);
-      logger31(`Response status code: ${response.status}`);
-      logger31(`Headers: ${sanitizer.sanitize(response.headers)}`);
+      logger30(`Response status code: ${response.status}`);
+      logger30(`Headers: ${sanitizer.sanitize(response.headers)}`);
       return response;
     }
   };
@@ -43047,17 +43021,6 @@ function userAgentPolicy(options = {}) {
 }
 
 // node_modules/tslib/tslib.es6.mjs
-function __rest(s, e) {
-  var t = {};
-  for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
-    t[p] = s[p];
-  if (s != null && typeof Object.getOwnPropertySymbols === "function")
-    for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
-      if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
-        t[p[i]] = s[p[i]];
-    }
-  return t;
-}
 function __values(o) {
   var s = typeof Symbol === "function" && Symbol.iterator, m = s && o[s], i = 0;
   if (m) return m.call(o);
@@ -43111,19 +43074,6 @@ function __asyncGenerator(thisArg, _arguments, generator) {
   }
   function settle(f, v) {
     if (f(v), q.shift(), q.length) resume(q[0][0], q[0][1]);
-  }
-}
-function __asyncDelegator(o) {
-  var i, p;
-  return i = {}, verb("next"), verb("throw", function(e) {
-    throw e;
-  }), verb("return"), i[Symbol.iterator] = function() {
-    return this;
-  }, i;
-  function verb(n, f) {
-    i[n] = o[n] ? function(v) {
-      return (p = !p) ? { value: __await(o[n](v)), done: false } : f ? f(v) : v;
-    } : f;
   }
 }
 function __asyncValues(o) {
@@ -43240,7 +43190,7 @@ async function concat(sources) {
 
 // node_modules/@azure/core-rest-pipeline/dist/esm/policies/multipartPolicy.js
 function generateBoundary() {
-  return `----AzSDKFormBoundary${randomUUID2()}`;
+  return `----AzSDKFormBoundary${randomUUID3()}`;
 }
 function encodeHeaders(headers) {
   let result = "";
@@ -43477,7 +43427,7 @@ function isSystemError(err) {
 var retryPolicyLogger = createClientLogger("core-rest-pipeline retryPolicy");
 var retryPolicyName = "retryPolicy";
 function retryPolicy(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_COUNT }) {
-  const logger31 = options.logger || retryPolicyLogger;
+  const logger30 = options.logger || retryPolicyLogger;
   return {
     name: retryPolicyName,
     async sendRequest(request5, next) {
@@ -43490,11 +43440,11 @@ function retryPolicy(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_CO
         response = void 0;
         responseError = void 0;
         try {
-          logger31.info(`Retry ${retryCount}: Attempting to send request`, request5.requestId);
+          logger30.info(`Retry ${retryCount}: Attempting to send request`, request5.requestId);
           response = await next(request5);
-          logger31.info(`Retry ${retryCount}: Received a response from request`, request5.requestId);
+          logger30.info(`Retry ${retryCount}: Received a response from request`, request5.requestId);
         } catch (e) {
-          logger31.error(`Retry ${retryCount}: Received an error from request`, request5.requestId);
+          logger30.error(`Retry ${retryCount}: Received an error from request`, request5.requestId);
           responseError = e;
           if (!e || responseError.name !== "RestError") {
             throw e;
@@ -43502,12 +43452,12 @@ function retryPolicy(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_CO
           response = responseError.response;
         }
         if ((_a5 = request5.abortSignal) === null || _a5 === void 0 ? void 0 : _a5.aborted) {
-          logger31.error(`Retry ${retryCount}: Request aborted.`);
+          logger30.error(`Retry ${retryCount}: Request aborted.`);
           const abortError = new AbortError();
           throw abortError;
         }
         if (retryCount >= ((_b3 = options.maxRetries) !== null && _b3 !== void 0 ? _b3 : DEFAULT_RETRY_POLICY_COUNT)) {
-          logger31.info(`Retry ${retryCount}: Maximum retries reached. Returning the last received response, or throwing the last received error.`);
+          logger30.info(`Retry ${retryCount}: Maximum retries reached. Returning the last received response, or throwing the last received error.`);
           if (responseError) {
             throw responseError;
           } else if (response) {
@@ -43516,7 +43466,7 @@ function retryPolicy(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_CO
             throw new Error("Maximum retries reached with no response or error to throw");
           }
         }
-        logger31.info(`Retry ${retryCount}: Processing ${strategies.length} retry strategies.`);
+        logger30.info(`Retry ${retryCount}: Processing ${strategies.length} retry strategies.`);
         strategiesLoop: for (const strategy of strategies) {
           const strategyLogger = strategy.logger || retryPolicyLogger;
           strategyLogger.info(`Retry ${retryCount}: Processing retry strategy ${strategy.name}.`);
@@ -43546,11 +43496,11 @@ function retryPolicy(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_CO
           }
         }
         if (responseError) {
-          logger31.info(`None of the retry strategies could work with the received error. Throwing it.`);
+          logger30.info(`None of the retry strategies could work with the received error. Throwing it.`);
           throw responseError;
         }
         if (response) {
-          logger31.info(`None of the retry strategies could work with the received response. Returning it.`);
+          logger30.info(`None of the retry strategies could work with the received response. Returning it.`);
           return response;
         }
       }
@@ -44381,7 +44331,7 @@ var PipelineRequestImpl = class {
     this.tracingOptions = options.tracingOptions;
     this.onUploadProgress = options.onUploadProgress;
     this.onDownloadProgress = options.onDownloadProgress;
-    this.requestId = options.requestId || randomUUID2();
+    this.requestId = options.requestId || randomUUID3();
     this.allowInsecureConnection = (_f = options.allowInsecureConnection) !== null && _f !== void 0 ? _f : false;
     this.enableBrowserStreams = (_g = options.enableBrowserStreams) !== null && _g !== void 0 ? _g : false;
     this.agent = options.agent;
@@ -44542,7 +44492,7 @@ async function authorizeRequestOnCaeChallenge(onChallengeOptions, caeClaims) {
 function bearerTokenAuthenticationPolicy(options) {
   var _a5, _b3, _c3;
   const { credential, scopes, challengeCallbacks } = options;
-  const logger31 = options.logger || logger4;
+  const logger30 = options.logger || logger4;
   const callbacks = {
     authorizeRequest: (_b3 = (_a5 = challengeCallbacks === null || challengeCallbacks === void 0 ? void 0 : challengeCallbacks.authorizeRequest) === null || _a5 === void 0 ? void 0 : _a5.bind(challengeCallbacks)) !== null && _b3 !== void 0 ? _b3 : defaultAuthorizeRequest,
     authorizeRequestOnChallenge: (_c3 = challengeCallbacks === null || challengeCallbacks === void 0 ? void 0 : challengeCallbacks.authorizeRequestOnChallenge) === null || _c3 === void 0 ? void 0 : _c3.bind(challengeCallbacks)
@@ -44574,7 +44524,7 @@ function bearerTokenAuthenticationPolicy(options) {
         scopes: Array.isArray(scopes) ? scopes : [scopes],
         request: request5,
         getAccessToken,
-        logger: logger31
+        logger: logger30
       });
       let response;
       let error2;
@@ -44587,7 +44537,7 @@ function bearerTokenAuthenticationPolicy(options) {
           try {
             parsedClaim = atob(claims);
           } catch (e) {
-            logger31.warning(`The WWW-Authenticate header contains "claims" that cannot be parsed. Unable to perform the Continuous Access Evaluation authentication flow. Unparsable claims: ${claims}`);
+            logger30.warning(`The WWW-Authenticate header contains "claims" that cannot be parsed. Unable to perform the Continuous Access Evaluation authentication flow. Unparsable claims: ${claims}`);
             return response;
           }
           shouldSendRequest = await authorizeRequestOnCaeChallenge({
@@ -44595,7 +44545,7 @@ function bearerTokenAuthenticationPolicy(options) {
             response,
             request: request5,
             getAccessToken,
-            logger: logger31
+            logger: logger30
           }, parsedClaim);
           if (shouldSendRequest) {
             [response, error2] = await trySendRequest(request5, next);
@@ -44606,7 +44556,7 @@ function bearerTokenAuthenticationPolicy(options) {
             request: request5,
             response,
             getAccessToken,
-            logger: logger31
+            logger: logger30
           });
           if (shouldSendRequest) {
             [response, error2] = await trySendRequest(request5, next);
@@ -44618,7 +44568,7 @@ function bearerTokenAuthenticationPolicy(options) {
               try {
                 parsedClaim = atob(claims);
               } catch (e) {
-                logger31.warning(`The WWW-Authenticate header contains "claims" that cannot be parsed. Unable to perform the Continuous Access Evaluation authentication flow. Unparsable claims: ${claims}`);
+                logger30.warning(`The WWW-Authenticate header contains "claims" that cannot be parsed. Unable to perform the Continuous Access Evaluation authentication flow. Unparsable claims: ${claims}`);
                 return response;
               }
               shouldSendRequest = await authorizeRequestOnCaeChallenge({
@@ -44626,7 +44576,7 @@ function bearerTokenAuthenticationPolicy(options) {
                 response,
                 request: request5,
                 getAccessToken,
-                logger: logger31
+                logger: logger30
               }, parsedClaim);
               if (shouldSendRequest) {
                 [response, error2] = await trySendRequest(request5, next);
@@ -45793,7 +45743,7 @@ function calculateRegionalAuthority(regionalAuthority) {
 function createConfigurationErrorMessage(tenantId) {
   return `The current credential is not configured to acquire tokens for tenant ${tenantId}. To enable acquiring tokens for this tenant add it to the AdditionallyAllowedTenants on the credential options, or add "*" to AdditionallyAllowedTenants to allow acquiring tokens for any tenant.`;
 }
-function processMultiTenantRequest(tenantId, getTokenOptions, additionallyAllowedTenantIds = [], logger31) {
+function processMultiTenantRequest(tenantId, getTokenOptions, additionallyAllowedTenantIds = [], logger30) {
   let resolvedTenantId;
   if (process.env.AZURE_IDENTITY_DISABLE_MULTITENANTAUTH) {
     resolvedTenantId = tenantId;
@@ -45804,23 +45754,23 @@ function processMultiTenantRequest(tenantId, getTokenOptions, additionallyAllowe
   }
   if (tenantId && resolvedTenantId !== tenantId && !additionallyAllowedTenantIds.includes("*") && !additionallyAllowedTenantIds.some((t) => t.localeCompare(resolvedTenantId) === 0)) {
     const message = createConfigurationErrorMessage(resolvedTenantId);
-    logger31?.info(message);
+    logger30?.info(message);
     throw new CredentialUnavailableError(message);
   }
   return resolvedTenantId;
 }
 
 // node_modules/@azure/identity/dist/esm/util/tenantIdUtils.js
-function checkTenantId(logger31, tenantId) {
+function checkTenantId(logger30, tenantId) {
   if (!tenantId.match(/^[0-9a-zA-Z-.]+$/)) {
     const error2 = new Error("Invalid tenant id provided. You can locate your tenant id by following the instructions listed here: https://learn.microsoft.com/partner-center/find-ids-and-domain-names.");
-    logger31.info(formatError("", error2));
+    logger30.info(formatError("", error2));
     throw error2;
   }
 }
-function resolveTenantId(logger31, tenantId, clientId) {
+function resolveTenantId(logger30, tenantId, clientId) {
   if (tenantId) {
-    checkTenantId(logger31, tenantId);
+    checkTenantId(logger30, tenantId);
     return tenantId;
   }
   if (!clientId) {
@@ -46247,7 +46197,7 @@ function createMsalClient(clientId, tenantId, createMsalClientOptions = {}) {
 }
 
 // node_modules/@azure/identity/dist/esm/credentials/clientCertificateCredential.js
-var import_node_crypto = require("crypto");
+var import_node_crypto2 = require("crypto");
 var import_promises2 = require("fs/promises");
 var credentialName = "ClientCertificateCredential";
 var logger6 = credentialLogger(credentialName);
@@ -46303,7 +46253,7 @@ var ClientCertificateCredential = class {
     const parts = await parseCertificate(this.certificateConfiguration, this.sendCertificateChain ?? false);
     let privateKey;
     if (this.certificateConfiguration.certificatePassword !== void 0) {
-      privateKey = (0, import_node_crypto.createPrivateKey)({
+      privateKey = (0, import_node_crypto2.createPrivateKey)({
         key: parts.certificateContents,
         passphrase: this.certificateConfiguration.certificatePassword,
         format: "pem"
@@ -46339,8 +46289,8 @@ async function parseCertificate(certificateConfiguration, sendCertificateChain) 
   if (publicKeys.length === 0) {
     throw new Error("The file at the specified path does not contain a PEM-encoded certificate.");
   }
-  const thumbprint = (0, import_node_crypto.createHash)("sha1").update(Buffer.from(publicKeys[0], "base64")).digest("hex").toUpperCase();
-  const thumbprintSha256 = (0, import_node_crypto.createHash)("sha256").update(Buffer.from(publicKeys[0], "base64")).digest("hex").toUpperCase();
+  const thumbprint = (0, import_node_crypto2.createHash)("sha1").update(Buffer.from(publicKeys[0], "base64")).digest("hex").toUpperCase();
+  const thumbprintSha256 = (0, import_node_crypto2.createHash)("sha256").update(Buffer.from(publicKeys[0], "base64")).digest("hex").toUpperCase();
   return {
     certificateContents,
     thumbprintSha256,
@@ -46353,10 +46303,10 @@ async function parseCertificate(certificateConfiguration, sendCertificateChain) 
 function ensureScopes(scopes) {
   return Array.isArray(scopes) ? scopes : [scopes];
 }
-function ensureValidScopeForDevTimeCreds(scope, logger31) {
+function ensureValidScopeForDevTimeCreds(scope, logger30) {
   if (!scope.match(/^[0-9a-zA-Z-_.:/]+$/)) {
     const error2 = new Error("Invalid scope was specified by the user or calling client");
-    logger31.getToken.info(formatError(scope, error2));
+    logger30.getToken.info(formatError(scope, error2));
     throw error2;
   }
 }
@@ -47208,10 +47158,10 @@ var AzureDeveloperCliCredential = class {
 var import_child_process2 = __toESM(require("child_process"), 1);
 
 // node_modules/@azure/identity/dist/esm/util/subscriptionUtils.js
-function checkSubscription(logger31, subscription) {
+function checkSubscription(logger30, subscription) {
   if (!subscription.match(/^[0-9a-zA-Z-._ ]+$/)) {
     const error2 = new Error(`Subscription '${subscription}' contains invalid characters. If this is the name of a subscription, use its ID instead. You can locate your subscription by following the instructions listed here: https://learn.microsoft.com/azure/azure-portal/get-subscription-tenant-id`);
-    logger31.info(formatError("", error2));
+    logger30.info(formatError("", error2));
     throw error2;
   }
 }
@@ -47990,16 +47940,13 @@ var logger23 = credentialLogger(credentialName4);
 var logger24 = credentialLogger("AuthorizationCodeCredential");
 
 // node_modules/@azure/identity/dist/esm/credentials/onBehalfOfCredential.js
-var import_node_crypto2 = require("crypto");
+var import_node_crypto3 = require("crypto");
 var import_promises5 = require("fs/promises");
 var credentialName5 = "OnBehalfOfCredential";
 var logger25 = credentialLogger(credentialName5);
 
-// node_modules/@azure/keyvault-secrets/dist/esm/log.js
+// node_modules/@azure/keyvault-secrets/dist/esm/logger.js
 var logger26 = createClientLogger("keyvault-secrets");
-
-// node_modules/@azure/keyvault-secrets/dist/esm/generated/logger.js
-var logger27 = createClientLogger("keyvault-secrets");
 
 // node_modules/@typespec/ts-http-runtime/dist/esm/abort-controller/AbortError.js
 var AbortError2 = class extends Error {
@@ -48137,9 +48084,9 @@ function createLoggerContext(options) {
     }
     logLevel = level;
     const enabledNamespaces3 = [];
-    for (const logger31 of registeredLoggers2) {
-      if (shouldEnable2(logger31)) {
-        enabledNamespaces3.push(logger31.namespace);
+    for (const logger30 of registeredLoggers2) {
+      if (shouldEnable2(logger30)) {
+        enabledNamespaces3.push(logger30.namespace);
       }
     }
     debug_default2.enable(enabledNamespaces3.join(","));
@@ -48151,20 +48098,20 @@ function createLoggerContext(options) {
       console.error(`${options.logLevelEnvVarName} set to unknown log level '${logLevelFromEnv2}'; logging is not enabled. Acceptable values: ${TYPESPEC_RUNTIME_LOG_LEVELS.join(", ")}.`);
     }
   }
-  function shouldEnable2(logger31) {
-    return Boolean(logLevel && levelMap2[logger31.level] <= levelMap2[logLevel]);
+  function shouldEnable2(logger30) {
+    return Boolean(logLevel && levelMap2[logger30.level] <= levelMap2[logLevel]);
   }
   function createLogger2(parent, level) {
-    const logger31 = Object.assign(parent.extend(level), {
+    const logger30 = Object.assign(parent.extend(level), {
       level
     });
-    patchLogMethod2(parent, logger31);
-    if (shouldEnable2(logger31)) {
+    patchLogMethod2(parent, logger30);
+    if (shouldEnable2(logger30)) {
       const enabledNamespaces3 = debug_default2.disable();
-      debug_default2.enable(enabledNamespaces3 + "," + logger31.namespace);
+      debug_default2.enable(enabledNamespaces3 + "," + logger30.namespace);
     }
-    registeredLoggers2.add(logger31);
-    return logger31;
+    registeredLoggers2.add(logger30);
+    return logger30;
   }
   function contextGetLogLevel() {
     return logLevel;
@@ -48279,10 +48226,10 @@ function createHttpHeaders2(rawHeaders) {
 }
 
 // node_modules/@typespec/ts-http-runtime/dist/esm/util/uuidUtils.js
-var import_node_crypto3 = require("crypto");
+var import_node_crypto4 = require("crypto");
 var _a3;
-var uuidFunction2 = typeof ((_a3 = globalThis === null || globalThis === void 0 ? void 0 : globalThis.crypto) === null || _a3 === void 0 ? void 0 : _a3.randomUUID) === "function" ? globalThis.crypto.randomUUID.bind(globalThis.crypto) : import_node_crypto3.randomUUID;
-function randomUUID3() {
+var uuidFunction2 = typeof ((_a3 = globalThis === null || globalThis === void 0 ? void 0 : globalThis.crypto) === null || _a3 === void 0 ? void 0 : _a3.randomUUID) === "function" ? globalThis.crypto.randomUUID.bind(globalThis.crypto) : import_node_crypto4.randomUUID;
+function randomUUID4() {
   return uuidFunction2();
 }
 
@@ -48304,7 +48251,7 @@ var PipelineRequestImpl2 = class {
     this.abortSignal = options.abortSignal;
     this.onUploadProgress = options.onUploadProgress;
     this.onDownloadProgress = options.onDownloadProgress;
-    this.requestId = options.requestId || randomUUID3();
+    this.requestId = options.requestId || randomUUID4();
     this.allowInsecureConnection = (_f = options.allowInsecureConnection) !== null && _f !== void 0 ? _f : false;
     this.enableBrowserStreams = (_g = options.enableBrowserStreams) !== null && _g !== void 0 ? _g : false;
     this.requestOverrides = options.requestOverrides;
@@ -48689,7 +48636,7 @@ var zlib2 = __toESM(require("zlib"), 1);
 var import_node_stream3 = require("stream");
 
 // node_modules/@typespec/ts-http-runtime/dist/esm/log.js
-var logger28 = createClientLogger2("ts-http-runtime");
+var logger27 = createClientLogger2("ts-http-runtime");
 
 // node_modules/@typespec/ts-http-runtime/dist/esm/nodeHttpClient.js
 var DEFAULT_TLS_SETTINGS2 = {};
@@ -48760,7 +48707,7 @@ var NodeHttpClient2 = class {
     if (request5.timeout > 0) {
       timeoutId = setTimeout(() => {
         const sanitizer = new Sanitizer2();
-        logger28.info(`request to '${sanitizer.sanitizeUrl(request5.url)}' timed out. canceling...`);
+        logger27.info(`request to '${sanitizer.sanitizeUrl(request5.url)}' timed out. canceling...`);
         abortController.abort();
       }, request5.timeout);
     }
@@ -48779,7 +48726,7 @@ var NodeHttpClient2 = class {
         const onUploadProgress = request5.onUploadProgress;
         const uploadReportStream = new ReportTransform2(onUploadProgress);
         uploadReportStream.on("error", (e) => {
-          logger28.error("Error in upload progress", e);
+          logger27.error("Error in upload progress", e);
         });
         if (isReadableStream2(body)) {
           body.pipe(uploadReportStream);
@@ -48808,7 +48755,7 @@ var NodeHttpClient2 = class {
       if (onDownloadProgress) {
         const downloadReportStream = new ReportTransform2(onDownloadProgress);
         downloadReportStream.on("error", (e) => {
-          logger28.error("Error in download progress", e);
+          logger27.error("Error in download progress", e);
         });
         responseStream.pipe(downloadReportStream);
         responseStream = downloadReportStream;
@@ -48838,7 +48785,7 @@ var NodeHttpClient2 = class {
             (_a6 = request5.abortSignal) === null || _a6 === void 0 ? void 0 : _a6.removeEventListener("abort", abortListener);
           }
         }).catch((e) => {
-          logger28.warning("Error when cleaning up abortListener on httpRequest", e);
+          logger27.warning("Error when cleaning up abortListener on httpRequest", e);
         });
       }
     }
@@ -48871,7 +48818,7 @@ var NodeHttpClient2 = class {
         } else if (isArrayBuffer2(body)) {
           req.end(ArrayBuffer.isView(body) ? Buffer.from(body.buffer) : Buffer.from(body));
         } else {
-          logger28.error("Unrecognized body type", body);
+          logger27.error("Unrecognized body type", body);
           reject(new RestError2("Unrecognized body type"));
         }
       } else {
@@ -48899,7 +48846,7 @@ var NodeHttpClient2 = class {
       if (agent && agent.options.keepAlive === !disableKeepAlive) {
         return agent;
       }
-      logger28.info("No cached TLS Agent exist, creating a new Agent");
+      logger27.info("No cached TLS Agent exist, creating a new Agent");
       agent = new https2.Agent(Object.assign({
         // keepAlive is true if disableKeepAlive is false.
         keepAlive: !disableKeepAlive
@@ -48988,7 +48935,7 @@ function createDefaultHttpClient2() {
 var logPolicyName2 = "logPolicy";
 function logPolicy2(options = {}) {
   var _a5;
-  const logger31 = (_a5 = options.logger) !== null && _a5 !== void 0 ? _a5 : logger28.info;
+  const logger30 = (_a5 = options.logger) !== null && _a5 !== void 0 ? _a5 : logger27.info;
   const sanitizer = new Sanitizer2({
     additionalAllowedHeaderNames: options.additionalAllowedHeaderNames,
     additionalAllowedQueryParameters: options.additionalAllowedQueryParameters
@@ -48996,13 +48943,13 @@ function logPolicy2(options = {}) {
   return {
     name: logPolicyName2,
     async sendRequest(request5, next) {
-      if (!logger31.enabled) {
+      if (!logger30.enabled) {
         return next(request5);
       }
-      logger31(`Request: ${sanitizer.sanitize(request5)}`);
+      logger30(`Request: ${sanitizer.sanitize(request5)}`);
       const response = await next(request5);
-      logger31(`Response status code: ${response.status}`);
-      logger31(`Headers: ${sanitizer.sanitize(response.headers)}`);
+      logger30(`Response status code: ${response.status}`);
+      logger30(`Headers: ${sanitizer.sanitize(response.headers)}`);
       return response;
     }
   };
@@ -49257,7 +49204,7 @@ function isSystemError2(err) {
 var retryPolicyLogger2 = createClientLogger2("ts-http-runtime retryPolicy");
 var retryPolicyName2 = "retryPolicy";
 function retryPolicy2(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_COUNT2 }) {
-  const logger31 = options.logger || retryPolicyLogger2;
+  const logger30 = options.logger || retryPolicyLogger2;
   return {
     name: retryPolicyName2,
     async sendRequest(request5, next) {
@@ -49270,11 +49217,11 @@ function retryPolicy2(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_C
         response = void 0;
         responseError = void 0;
         try {
-          logger31.info(`Retry ${retryCount}: Attempting to send request`, request5.requestId);
+          logger30.info(`Retry ${retryCount}: Attempting to send request`, request5.requestId);
           response = await next(request5);
-          logger31.info(`Retry ${retryCount}: Received a response from request`, request5.requestId);
+          logger30.info(`Retry ${retryCount}: Received a response from request`, request5.requestId);
         } catch (e) {
-          logger31.error(`Retry ${retryCount}: Received an error from request`, request5.requestId);
+          logger30.error(`Retry ${retryCount}: Received an error from request`, request5.requestId);
           responseError = e;
           if (!e || responseError.name !== "RestError") {
             throw e;
@@ -49282,12 +49229,12 @@ function retryPolicy2(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_C
           response = responseError.response;
         }
         if ((_a5 = request5.abortSignal) === null || _a5 === void 0 ? void 0 : _a5.aborted) {
-          logger31.error(`Retry ${retryCount}: Request aborted.`);
+          logger30.error(`Retry ${retryCount}: Request aborted.`);
           const abortError = new AbortError2();
           throw abortError;
         }
         if (retryCount >= ((_b3 = options.maxRetries) !== null && _b3 !== void 0 ? _b3 : DEFAULT_RETRY_POLICY_COUNT2)) {
-          logger31.info(`Retry ${retryCount}: Maximum retries reached. Returning the last received response, or throwing the last received error.`);
+          logger30.info(`Retry ${retryCount}: Maximum retries reached. Returning the last received response, or throwing the last received error.`);
           if (responseError) {
             throw responseError;
           } else if (response) {
@@ -49296,9 +49243,9 @@ function retryPolicy2(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_C
             throw new Error("Maximum retries reached with no response or error to throw");
           }
         }
-        logger31.info(`Retry ${retryCount}: Processing ${strategies.length} retry strategies.`);
+        logger30.info(`Retry ${retryCount}: Processing ${strategies.length} retry strategies.`);
         strategiesLoop: for (const strategy of strategies) {
-          const strategyLogger = strategy.logger || logger31;
+          const strategyLogger = strategy.logger || logger30;
           strategyLogger.info(`Retry ${retryCount}: Processing retry strategy ${strategy.name}.`);
           const modifiers = strategy.retry({
             retryCount,
@@ -49326,11 +49273,11 @@ function retryPolicy2(strategies, options = { maxRetries: DEFAULT_RETRY_POLICY_C
           }
         }
         if (responseError) {
-          logger31.info(`None of the retry strategies could work with the received error. Throwing it.`);
+          logger30.info(`None of the retry strategies could work with the received error. Throwing it.`);
           throw responseError;
         }
         if (response) {
-          logger31.info(`None of the retry strategies could work with the received response. Returning it.`);
+          logger30.info(`None of the retry strategies could work with the received response. Returning it.`);
           return response;
         }
       }
@@ -49530,7 +49477,7 @@ function setProxyAgentOnRequest2(request5, cachedAgents, proxyUrl) {
   const url = new URL(request5.url);
   const isInsecure = url.protocol !== "https:";
   if (request5.tlsSettings) {
-    logger28.warning("TLS settings are not supported in combination with custom Proxy, certificates provided to the client will be ignored.");
+    logger27.warning("TLS settings are not supported in combination with custom Proxy, certificates provided to the client will be ignored.");
   }
   const headers = request5.headers.toJSON();
   if (isInsecure) {
@@ -49684,7 +49631,7 @@ async function concat2(sources) {
 
 // node_modules/@typespec/ts-http-runtime/dist/esm/policies/multipartPolicy.js
 function generateBoundary2() {
-  return `----AzSDKFormBoundary${randomUUID3()}`;
+  return `----AzSDKFormBoundary${randomUUID4()}`;
 }
 function encodeHeaders2(headers) {
   let result = "";
@@ -49846,7 +49793,7 @@ function allowInsecureConnection(request5, options) {
 }
 function emitInsecureConnectionWarning() {
   const warning = "Sending token over insecure transport. Assume any token issued is compromised.";
-  logger28.warning(warning);
+  logger27.warning(warning);
   if (typeof (process === null || process === void 0 ? void 0 : process.emitWarning) === "function" && !insecureConnectionWarningEmmitted) {
     insecureConnectionWarningEmmitted = true;
     process.emitWarning(warning);
@@ -50580,21 +50527,26 @@ function isCredential(param) {
   return isKeyCredential(param) || isTokenCredential(param);
 }
 
-// node_modules/@azure/keyvault-secrets/dist/esm/generated/api/keyVaultContext.js
+// node_modules/@azure/keyvault-secrets/dist/esm/constants.js
+var SDK_VERSION4 = "4.11.2";
+
+// node_modules/@azure/keyvault-secrets/dist/esm/api/keyVaultContext.js
 function createKeyVault(endpointParam, credential, options = {}) {
-  var _a5, _b3, _c3, _d3, _e, _f, _g, _h;
-  const endpointUrl = (_b3 = (_a5 = options.endpoint) !== null && _a5 !== void 0 ? _a5 : options.baseUrl) !== null && _b3 !== void 0 ? _b3 : String(endpointParam);
-  const prefixFromOptions = (_c3 = options === null || options === void 0 ? void 0 : options.userAgentOptions) === null || _c3 === void 0 ? void 0 : _c3.userAgentPrefix;
-  const userAgentInfo = `azsdk-js-keyvault-secrets/1.0.0-beta.1`;
+  const endpointUrl = options.endpoint ?? options.baseUrl ?? String(endpointParam);
+  const prefixFromOptions = options?.userAgentOptions?.userAgentPrefix;
+  const userAgentInfo = `azsdk-js-keyvault-secrets/${SDK_VERSION4}`;
   const userAgentPrefix = prefixFromOptions ? `${prefixFromOptions} azsdk-js-api ${userAgentInfo}` : `azsdk-js-api ${userAgentInfo}`;
-  const _j = Object.assign(Object.assign({}, options), { userAgentOptions: { userAgentPrefix }, loggingOptions: { logger: (_e = (_d3 = options.loggingOptions) === null || _d3 === void 0 ? void 0 : _d3.logger) !== null && _e !== void 0 ? _e : logger27.info }, credentials: {
-    scopes: (_g = (_f = options.credentials) === null || _f === void 0 ? void 0 : _f.scopes) !== null && _g !== void 0 ? _g : [
-      "https://vault.azure.net/.default"
-    ]
-  } }), { apiVersion: _ } = _j, updatedOptions = __rest(_j, ["apiVersion"]);
+  const { apiVersion: _, ...updatedOptions } = {
+    ...options,
+    userAgentOptions: { userAgentPrefix },
+    loggingOptions: { logger: options.loggingOptions?.logger ?? logger26.info },
+    credentials: {
+      scopes: options.credentials?.scopes ?? ["https://vault.azure.net/.default"]
+    }
+  };
   const clientContext = getClient2(endpointUrl, credential, updatedOptions);
   clientContext.pipeline.removePolicy({ name: "ApiVersionPolicy" });
-  const apiVersion = (_h = options.apiVersion) !== null && _h !== void 0 ? _h : "7.6";
+  const apiVersion = options.apiVersion ?? "2025-07-01";
   clientContext.pipeline.addPolicy({
     name: "ClientApiVersionPolicy",
     sendRequest: (req, next) => {
@@ -50605,10 +50557,10 @@ function createKeyVault(endpointParam, credential, options = {}) {
       return next(req);
     }
   });
-  return Object.assign(Object.assign({}, clientContext), { apiVersion });
+  return { ...clientContext, apiVersion };
 }
 
-// node_modules/@azure/keyvault-secrets/dist/esm/generated/models/models.js
+// node_modules/@azure/keyvault-secrets/dist/esm/models/models.js
 function secretSetParametersSerializer(item) {
   return {
     value: item["value"],
@@ -50653,7 +50605,8 @@ function secretBundleDeserializer(item) {
     attributes: !item["attributes"] ? item["attributes"] : secretAttributesDeserializer(item["attributes"]),
     tags: item["tags"],
     kid: item["kid"],
-    managed: item["managed"]
+    managed: item["managed"],
+    previousVersion: item["previousVersion"]
   };
 }
 function keyVaultErrorDeserializer(item) {
@@ -50677,6 +50630,7 @@ function deletedSecretBundleDeserializer(item) {
     tags: item["tags"],
     kid: item["kid"],
     managed: item["managed"],
+    previousVersion: item["previousVersion"],
     recoveryId: item["recoveryId"],
     scheduledPurgeDate: !item["scheduledPurgeDate"] ? item["scheduledPurgeDate"] : new Date(item["scheduledPurgeDate"] * 1e3),
     deletedDate: !item["deletedDate"] ? item["deletedDate"] : new Date(item["deletedDate"] * 1e3)
@@ -50740,18 +50694,23 @@ function backupSecretResultDeserializer(item) {
 function secretRestoreParametersSerializer(item) {
   return { value: uint8ArrayToString(item["secretBundleBackup"], "base64url") };
 }
+var KnownContentType;
+(function(KnownContentType2) {
+  KnownContentType2["PFX"] = "application/x-pkcs12";
+  KnownContentType2["PEM"] = "application/x-pem-file";
+})(KnownContentType || (KnownContentType = {}));
 var KnownVersions;
 (function(KnownVersions2) {
   KnownVersions2["V75"] = "7.5";
   KnownVersions2["V76Preview2"] = "7.6-preview.2";
   KnownVersions2["V76"] = "7.6";
+  KnownVersions2["V20250701"] = "2025-07-01";
 })(KnownVersions || (KnownVersions = {}));
 
-// node_modules/@azure/keyvault-secrets/dist/esm/generated/static-helpers/pagingHelpers.js
+// node_modules/@azure/keyvault-secrets/dist/esm/static-helpers/pagingHelpers.js
 function buildPagedAsyncIterator(client, getInitialResponse, processResponseBody, expectedStatuses, options = {}) {
-  var _a5, _b3;
-  const itemName = (_a5 = options.itemName) !== null && _a5 !== void 0 ? _a5 : "value";
-  const nextLinkName = (_b3 = options.nextLinkName) !== null && _b3 !== void 0 ? _b3 : "nextLink";
+  const itemName = options.itemName ?? "value";
+  const nextLinkName = options.nextLinkName ?? "nextLink";
   const pagedResult = {
     getPage: async (pageLink) => {
       const result = pageLink === void 0 ? await getInitialResponse() : await client.pathUnchecked(pageLink).get();
@@ -50765,7 +50724,7 @@ function buildPagedAsyncIterator(client, getInitialResponse, processResponseBody
       };
     },
     byPage: (settings) => {
-      const { continuationToken } = settings !== null && settings !== void 0 ? settings : {};
+      const { continuationToken } = settings ?? {};
       return getPageAsyncIterator(pagedResult, {
         pageLink: continuationToken
       });
@@ -50774,7 +50733,6 @@ function buildPagedAsyncIterator(client, getInitialResponse, processResponseBody
   return getPagedAsyncIterator(pagedResult);
 }
 function getPagedAsyncIterator(pagedResult) {
-  var _a5;
   const iter = getItemAsyncIterator(pagedResult);
   return {
     next() {
@@ -50783,56 +50741,38 @@ function getPagedAsyncIterator(pagedResult) {
     [Symbol.asyncIterator]() {
       return this;
     },
-    byPage: (_a5 = pagedResult === null || pagedResult === void 0 ? void 0 : pagedResult.byPage) !== null && _a5 !== void 0 ? _a5 : ((settings) => {
-      const { continuationToken } = settings !== null && settings !== void 0 ? settings : {};
+    byPage: pagedResult?.byPage ?? ((settings) => {
+      const { continuationToken } = settings ?? {};
       return getPageAsyncIterator(pagedResult, {
         pageLink: continuationToken
       });
     })
   };
 }
-function getItemAsyncIterator(pagedResult) {
-  return __asyncGenerator(this, arguments, function* getItemAsyncIterator_1() {
-    var _a5, e_1, _b3, _c3;
-    const pages = getPageAsyncIterator(pagedResult);
-    try {
-      for (var _d3 = true, pages_1 = __asyncValues(pages), pages_1_1; pages_1_1 = yield __await(pages_1.next()), _a5 = pages_1_1.done, !_a5; _d3 = true) {
-        _c3 = pages_1_1.value;
-        _d3 = false;
-        const page = _c3;
-        yield __await(yield* __asyncDelegator(__asyncValues(page)));
-      }
-    } catch (e_1_1) {
-      e_1 = { error: e_1_1 };
-    } finally {
-      try {
-        if (!_d3 && !_a5 && (_b3 = pages_1.return)) yield __await(_b3.call(pages_1));
-      } finally {
-        if (e_1) throw e_1.error;
-      }
-    }
-  });
+async function* getItemAsyncIterator(pagedResult) {
+  const pages = getPageAsyncIterator(pagedResult);
+  for await (const page of pages) {
+    yield* page;
+  }
 }
-function getPageAsyncIterator(pagedResult_1) {
-  return __asyncGenerator(this, arguments, function* getPageAsyncIterator_1(pagedResult, options = {}) {
-    const { pageLink } = options;
-    let response = yield __await(pagedResult.getPage(pageLink !== null && pageLink !== void 0 ? pageLink : pagedResult.firstPageLink));
+async function* getPageAsyncIterator(pagedResult, options = {}) {
+  const { pageLink } = options;
+  let response = await pagedResult.getPage(pageLink ?? pagedResult.firstPageLink);
+  if (!response) {
+    return;
+  }
+  let result = response.page;
+  result.continuationToken = response.nextPageLink;
+  yield result;
+  while (response.nextPageLink) {
+    response = await pagedResult.getPage(response.nextPageLink);
     if (!response) {
-      return yield __await(void 0);
+      return;
     }
-    let result = response.page;
+    result = response.page;
     result.continuationToken = response.nextPageLink;
-    yield yield __await(result);
-    while (response.nextPageLink) {
-      response = yield __await(pagedResult.getPage(response.nextPageLink));
-      if (!response) {
-        return yield __await(void 0);
-      }
-      result = response.page;
-      result.continuationToken = response.nextPageLink;
-      yield yield __await(result);
-    }
-  });
+    yield result;
+  }
 }
 function getNextLink(body, nextLinkName) {
   if (!nextLinkName) {
@@ -50853,7 +50793,7 @@ function getElements(body, itemName) {
     throw new RestError(`Couldn't paginate response
  Body doesn't contain an array property with name: ${itemName}`);
   }
-  return value !== null && value !== void 0 ? value : [];
+  return value ?? [];
 }
 function checkPagingRequest(response, expectedStatuses) {
   if (!expectedStatuses.includes(response.status)) {
@@ -50861,9 +50801,9 @@ function checkPagingRequest(response, expectedStatuses) {
   }
 }
 
-// node_modules/@azure/keyvault-secrets/dist/esm/generated/static-helpers/urlTemplate.js
+// node_modules/@azure/keyvault-secrets/dist/esm/static-helpers/urlTemplate.js
 function encodeComponent(val, reserved, op) {
-  return (reserved !== null && reserved !== void 0 ? reserved : op === "+") || op === "#" ? encodeReservedComponent(val) : encodeRFC3986URIComponent(val);
+  return (reserved ?? op === "+") || op === "#" ? encodeReservedComponent(val) : encodeRFC3986URIComponent(val);
 }
 function encodeReservedComponent(str) {
   return str.split(/(%[0-9A-Fa-f]{2})/g).map((part) => !/%[0-9A-Fa-f]/.test(part) ? encodeURI(part) : part).join("");
@@ -50875,10 +50815,7 @@ function isDefined2(val) {
   return val !== void 0 && val !== null;
 }
 function getNamedAndIfEmpty(op) {
-  return [
-    !!op && [";", "?", "&"].includes(op),
-    !!op && ["?", "&"].includes(op) ? "=" : ""
-  ];
+  return [!!op && [";", "?", "&"].includes(op), !!op && ["?", "&"].includes(op) ? "=" : ""];
 }
 function getFirstOrSep(op, isFirst = false) {
   if (isFirst) {
@@ -51000,7 +50937,7 @@ function expandUrlTemplate(template, context2, option) {
         varValue: context2[varMatch[1]],
         varName: varMatch[1],
         modifier: varMatch[2] || varMatch[3],
-        reserved: option === null || option === void 0 ? void 0 : option.allowReserved
+        reserved: option?.allowReserved
       });
       if (varValue) {
         result.push(varValue);
@@ -51010,15 +50947,22 @@ function expandUrlTemplate(template, context2, option) {
   });
 }
 
-// node_modules/@azure/keyvault-secrets/dist/esm/generated/api/operations.js
+// node_modules/@azure/keyvault-secrets/dist/esm/api/operations.js
 function _restoreSecretSend(context2, parameters, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/secrets/restore{?api%2Dversion}", {
     "api%2Dversion": context2.apiVersion
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).post(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { contentType: "application/json", headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers), body: secretRestoreParametersSerializer(parameters) }));
+  return context2.path(path3).post({
+    ...operationOptionsToRequestParameters2(options),
+    contentType: "application/json",
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    },
+    body: secretRestoreParametersSerializer(parameters)
+  });
 }
 async function _restoreSecretDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51034,14 +50978,19 @@ async function restoreSecret(context2, parameters, options = { requestOptions: {
   return _restoreSecretDeserialize(result);
 }
 function _backupSecretSend(context2, secretName, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/secrets/{secret-name}/backup{?api%2Dversion}", {
     "secret-name": secretName,
     "api%2Dversion": context2.apiVersion
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).post(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers) }));
+  return context2.path(path3).post({
+    ...operationOptionsToRequestParameters2(options),
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    }
+  });
 }
 async function _backupSecretDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51057,14 +51006,19 @@ async function backupSecret(context2, secretName, options = { requestOptions: {}
   return _backupSecretDeserialize(result);
 }
 function _recoverDeletedSecretSend(context2, secretName, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/deletedsecrets/{secret-name}/recover{?api%2Dversion}", {
     "secret-name": secretName,
     "api%2Dversion": context2.apiVersion
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).post(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers) }));
+  return context2.path(path3).post({
+    ...operationOptionsToRequestParameters2(options),
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    }
+  });
 }
 async function _recoverDeletedSecretDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51080,14 +51034,19 @@ async function recoverDeletedSecret(context2, secretName, options = { requestOpt
   return _recoverDeletedSecretDeserialize(result);
 }
 function _purgeDeletedSecretSend(context2, secretName, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/deletedsecrets/{secret-name}{?api%2Dversion}", {
     "secret-name": secretName,
     "api%2Dversion": context2.apiVersion
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).delete(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers) }));
+  return context2.path(path3).delete({
+    ...operationOptionsToRequestParameters2(options),
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    }
+  });
 }
 async function _purgeDeletedSecretDeserialize(result) {
   const expectedStatuses = ["204"];
@@ -51103,14 +51062,19 @@ async function purgeDeletedSecret(context2, secretName, options = { requestOptio
   return _purgeDeletedSecretDeserialize(result);
 }
 function _getDeletedSecretSend(context2, secretName, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/deletedsecrets/{secret-name}{?api%2Dversion}", {
     "secret-name": secretName,
     "api%2Dversion": context2.apiVersion
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).get(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers) }));
+  return context2.path(path3).get({
+    ...operationOptionsToRequestParameters2(options),
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    }
+  });
 }
 async function _getDeletedSecretDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51126,14 +51090,19 @@ async function getDeletedSecret(context2, secretName, options = { requestOptions
   return _getDeletedSecretDeserialize(result);
 }
 function _getDeletedSecretsSend(context2, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/deletedsecrets{?api%2Dversion,maxresults}", {
     "api%2Dversion": context2.apiVersion,
-    maxresults: options === null || options === void 0 ? void 0 : options.maxresults
+    maxresults: options?.maxresults
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).get(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers) }));
+  return context2.path(path3).get({
+    ...operationOptionsToRequestParameters2(options),
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    }
+  });
 }
 async function _getDeletedSecretsDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51148,15 +51117,20 @@ function getDeletedSecrets(context2, options = { requestOptions: {} }) {
   return buildPagedAsyncIterator(context2, () => _getDeletedSecretsSend(context2, options), _getDeletedSecretsDeserialize, ["200"], { itemName: "value", nextLinkName: "nextLink" });
 }
 function _getSecretVersionsSend(context2, secretName, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/secrets/{secret-name}/versions{?api%2Dversion,maxresults}", {
     "secret-name": secretName,
     "api%2Dversion": context2.apiVersion,
-    maxresults: options === null || options === void 0 ? void 0 : options.maxresults
+    maxresults: options?.maxresults
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).get(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers) }));
+  return context2.path(path3).get({
+    ...operationOptionsToRequestParameters2(options),
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    }
+  });
 }
 async function _getSecretVersionsDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51171,14 +51145,19 @@ function getSecretVersions(context2, secretName, options = { requestOptions: {} 
   return buildPagedAsyncIterator(context2, () => _getSecretVersionsSend(context2, secretName, options), _getSecretVersionsDeserialize, ["200"], { itemName: "value", nextLinkName: "nextLink" });
 }
 function _getSecretsSend(context2, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/secrets{?api%2Dversion,maxresults}", {
     "api%2Dversion": context2.apiVersion,
-    maxresults: options === null || options === void 0 ? void 0 : options.maxresults
+    maxresults: options?.maxresults
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).get(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers) }));
+  return context2.path(path3).get({
+    ...operationOptionsToRequestParameters2(options),
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    }
+  });
 }
 async function _getSecretsDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51193,15 +51172,21 @@ function getSecrets(context2, options = { requestOptions: {} }) {
   return buildPagedAsyncIterator(context2, () => _getSecretsSend(context2, options), _getSecretsDeserialize, ["200"], { itemName: "value", nextLinkName: "nextLink" });
 }
 function _getSecretSend(context2, secretName, secretVersion, options = { requestOptions: {} }) {
-  var _a5, _b3;
-  const path3 = expandUrlTemplate("/secrets/{secret-name}/{secret-version}{?api%2Dversion}", {
+  const path3 = expandUrlTemplate("/secrets/{secret-name}/{secret-version}{?api%2Dversion,outContentType}", {
     "secret-name": secretName,
     "secret-version": secretVersion,
-    "api%2Dversion": context2.apiVersion
+    "api%2Dversion": context2.apiVersion,
+    outContentType: options?.outContentType
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).get(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers) }));
+  return context2.path(path3).get({
+    ...operationOptionsToRequestParameters2(options),
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    }
+  });
 }
 async function _getSecretDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51217,15 +51202,22 @@ async function getSecret(context2, secretName, secretVersion, options = { reques
   return _getSecretDeserialize(result);
 }
 function _updateSecretSend(context2, secretName, secretVersion, parameters, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/secrets/{secret-name}/{secret-version}{?api%2Dversion}", {
     "secret-name": secretName,
     "secret-version": secretVersion,
     "api%2Dversion": context2.apiVersion
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).patch(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { contentType: "application/json", headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers), body: secretUpdateParametersSerializer(parameters) }));
+  return context2.path(path3).patch({
+    ...operationOptionsToRequestParameters2(options),
+    contentType: "application/json",
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    },
+    body: secretUpdateParametersSerializer(parameters)
+  });
 }
 async function _updateSecretDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51241,14 +51233,19 @@ async function updateSecret(context2, secretName, secretVersion, parameters, opt
   return _updateSecretDeserialize(result);
 }
 function _deleteSecretSend(context2, secretName, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/secrets/{secret-name}{?api%2Dversion}", {
     "secret-name": secretName,
     "api%2Dversion": context2.apiVersion
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).delete(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers) }));
+  return context2.path(path3).delete({
+    ...operationOptionsToRequestParameters2(options),
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    }
+  });
 }
 async function _deleteSecretDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51264,14 +51261,21 @@ async function deleteSecret(context2, secretName, options = { requestOptions: {}
   return _deleteSecretDeserialize(result);
 }
 function _setSecretSend(context2, secretName, parameters, options = { requestOptions: {} }) {
-  var _a5, _b3;
   const path3 = expandUrlTemplate("/secrets/{secret-name}{?api%2Dversion}", {
     "secret-name": secretName,
     "api%2Dversion": context2.apiVersion
   }, {
-    allowReserved: (_a5 = options === null || options === void 0 ? void 0 : options.requestOptions) === null || _a5 === void 0 ? void 0 : _a5.skipUrlEncoding
+    allowReserved: options?.requestOptions?.skipUrlEncoding
   });
-  return context2.path(path3).put(Object.assign(Object.assign({}, operationOptionsToRequestParameters2(options)), { contentType: "application/json", headers: Object.assign({ accept: "application/json" }, (_b3 = options.requestOptions) === null || _b3 === void 0 ? void 0 : _b3.headers), body: secretSetParametersSerializer(parameters) }));
+  return context2.path(path3).put({
+    ...operationOptionsToRequestParameters2(options),
+    contentType: "application/json",
+    headers: {
+      accept: "application/json",
+      ...options.requestOptions?.headers
+    },
+    body: secretSetParametersSerializer(parameters)
+  });
 }
 async function _setSecretDeserialize(result) {
   const expectedStatuses = ["200"];
@@ -51287,14 +51291,19 @@ async function setSecret2(context2, secretName, parameters, options = { requestO
   return _setSecretDeserialize(result);
 }
 
-// node_modules/@azure/keyvault-secrets/dist/esm/generated/keyVaultClient.js
+// node_modules/@azure/keyvault-secrets/dist/esm/keyVaultClient.js
 var KeyVaultClient = class {
+  _client;
+  /** The pipeline used by this client to make requests */
+  pipeline;
   /** The key vault client performs cryptographic key operations and vault operations against the Key Vault service. */
   constructor(endpointParam, credential, options = {}) {
-    var _a5;
-    const prefixFromOptions = (_a5 = options === null || options === void 0 ? void 0 : options.userAgentOptions) === null || _a5 === void 0 ? void 0 : _a5.userAgentPrefix;
+    const prefixFromOptions = options?.userAgentOptions?.userAgentPrefix;
     const userAgentPrefix = prefixFromOptions ? `${prefixFromOptions} azsdk-js-client` : `azsdk-js-client`;
-    this._client = createKeyVault(endpointParam, credential, Object.assign(Object.assign({}, options), { userAgentOptions: { userAgentPrefix } }));
+    this._client = createKeyVault(endpointParam, credential, {
+      ...options,
+      userAgentOptions: { userAgentPrefix }
+    });
     this.pipeline = this._client.pipeline;
   }
   /** Restores a backed up secret, and all its versions, to a vault. This operation requires the secrets/restore permission. */
@@ -51363,7 +51372,7 @@ function parseWWWAuthenticateHeader(headerValue) {
     if (p.match(/\w="/)) {
       const [key, ...value] = p.split("=");
       if (validWWWAuthenticateProperties.includes(key)) {
-        return Object.assign(Object.assign({}, kvPairs), { [key]: value.join("=").slice(1, -1) });
+        return { ...kvPairs, [key]: value.join("=").slice(1, -1) };
       }
     }
     return kvPairs;
@@ -51395,7 +51404,7 @@ async function beginRefresh2(getAccessToken, retryIntervalInMs, refreshTimeout) 
     if (Date.now() < refreshTimeout) {
       try {
         return await getAccessToken();
-      } catch (_a5) {
+      } catch {
         return null;
       }
     } else {
@@ -51417,7 +51426,10 @@ function createTokenCycler2(credential, tokenCyclerOptions) {
   let refreshWorker = null;
   let token = null;
   let tenantId;
-  const options = Object.assign(Object.assign({}, DEFAULT_CYCLER_OPTIONS2), tokenCyclerOptions);
+  const options = {
+    ...DEFAULT_CYCLER_OPTIONS2,
+    ...tokenCyclerOptions
+  };
   const cycler = {
     /**
      * Produces true if a refresh job is currently in progress.
@@ -51430,14 +51442,13 @@ function createTokenCycler2(credential, tokenCyclerOptions) {
      * window and not already refreshing)
      */
     get shouldRefresh() {
-      var _a5;
       if (cycler.isRefreshing) {
         return false;
       }
-      if ((token === null || token === void 0 ? void 0 : token.refreshAfterTimestamp) && token.refreshAfterTimestamp < Date.now()) {
+      if (token?.refreshAfterTimestamp && token.refreshAfterTimestamp < Date.now()) {
         return true;
       }
-      return ((_a5 = token === null || token === void 0 ? void 0 : token.expiresOnTimestamp) !== null && _a5 !== void 0 ? _a5 : 0) - options.refreshWindowInMs < Date.now();
+      return (token?.expiresOnTimestamp ?? 0) - options.refreshWindowInMs < Date.now();
     },
     /**
      * Produces true if the cycler MUST refresh (null or nearly-expired
@@ -51448,14 +51459,13 @@ function createTokenCycler2(credential, tokenCyclerOptions) {
     }
   };
   function refresh(scopes, getTokenOptions) {
-    var _a5;
     if (!cycler.isRefreshing) {
       const tryGetAccessToken = () => credential.getToken(scopes, getTokenOptions);
       refreshWorker = beginRefresh2(
         tryGetAccessToken,
         options.retryIntervalInMs,
         // If we don't have a token, then we should timeout immediately
-        (_a5 = token === null || token === void 0 ? void 0 : token.expiresOnTimestamp) !== null && _a5 !== void 0 ? _a5 : Date.now()
+        token?.expiresOnTimestamp ?? Date.now()
       ).then((_token) => {
         refreshWorker = null;
         token = _token;
@@ -51488,7 +51498,7 @@ function createTokenCycler2(credential, tokenCyclerOptions) {
 }
 
 // node_modules/@azure/keyvault-common/dist/esm/logger.js
-var logger29 = createClientLogger("keyvault-common");
+var logger28 = createClientLogger("keyvault-common");
 
 // node_modules/@azure/keyvault-common/dist/esm/keyVaultAuthenticationPolicy.js
 function verifyChallengeResource(scope, request5) {
@@ -51531,7 +51541,11 @@ function keyVaultAuthenticationPolicy(credential, options = {}) {
         break;
       // Retry, we should not overwrite the original body
       case "complete": {
-        const token = await getAccessToken(challengeState.scopes, Object.assign(Object.assign({}, requestOptions), { enableCae: true, tenantId: challengeState.tenantId }));
+        const token = await getAccessToken(challengeState.scopes, {
+          ...requestOptions,
+          enableCae: true,
+          tenantId: challengeState.tenantId
+        });
         if (token) {
           request5.headers.set("authorization", `Bearer ${token.token}`);
         }
@@ -51549,7 +51563,7 @@ function keyVaultAuthenticationPolicy(credential, options = {}) {
     const getTokenOptions = requestToOptions(request5);
     const challenge = response.headers.get("WWW-Authenticate");
     if (!challenge) {
-      logger29.warning("keyVaultAuthentication policy encountered a 401 response without a corresponding WWW-Authenticate header. This is unexpected. Not handling the 401 response.");
+      logger28.warning("keyVaultAuthentication policy encountered a 401 response without a corresponding WWW-Authenticate header. This is unexpected. Not handling the 401 response.");
       return response;
     }
     const parsedChallenge = parseWWWAuthenticateHeader(challenge);
@@ -51560,7 +51574,11 @@ function keyVaultAuthenticationPolicy(credential, options = {}) {
     if (!disableChallengeResourceVerification) {
       verifyChallengeResource(scope, request5);
     }
-    const accessToken = await getAccessToken([scope], Object.assign(Object.assign({}, getTokenOptions), { enableCae: true, tenantId: parsedChallenge.tenantId }));
+    const accessToken = await getAccessToken([scope], {
+      ...getTokenOptions,
+      enableCae: true,
+      tenantId: parsedChallenge.tenantId
+    });
     if (!accessToken) {
       return response;
     }
@@ -51589,7 +51607,12 @@ function keyVaultAuthenticationPolicy(credential, options = {}) {
       return response;
     }
     const claims = atob(base64EncodedClaims);
-    const accessToken = await getAccessToken(challengeState.scopes, Object.assign(Object.assign({}, getTokenOptions), { enableCae: true, tenantId: challengeState.tenantId, claims }));
+    const accessToken = await getAccessToken(challengeState.scopes, {
+      ...getTokenOptions,
+      enableCae: true,
+      tenantId: challengeState.tenantId,
+      claims
+    });
     request5.headers.set("Authorization", `Bearer ${accessToken.token}`);
     return next(request5);
   }
@@ -51638,13 +51661,16 @@ function parseKeyVaultIdentifier(collection, identifier) {
 }
 
 // node_modules/@azure/keyvault-secrets/dist/esm/secretsModels.js
-var LATEST_API_VERSION = "7.6";
+var LATEST_API_VERSION = "2025-07-01";
 
 // node_modules/@azure/keyvault-secrets/dist/esm/identifier.js
 function parseKeyVaultSecretIdentifier(id) {
   const urlParts = id.split("/");
   const collection = urlParts[3];
-  return Object.assign({ sourceId: id }, parseKeyVaultIdentifier(collection, id));
+  return {
+    sourceId: id,
+    ...parseKeyVaultIdentifier(collection, id)
+  };
 }
 
 // node_modules/@azure/keyvault-secrets/dist/esm/transformations.js
@@ -51658,17 +51684,18 @@ function getSecretFromSecretBundle(bundle) {
     value: secretBundle.value,
     name: parsedId.name,
     properties: {
-      expiresOn: attributes === null || attributes === void 0 ? void 0 : attributes.expires,
-      createdOn: attributes === null || attributes === void 0 ? void 0 : attributes.created,
-      updatedOn: attributes === null || attributes === void 0 ? void 0 : attributes.updated,
-      enabled: attributes === null || attributes === void 0 ? void 0 : attributes.enabled,
-      notBefore: attributes === null || attributes === void 0 ? void 0 : attributes.notBefore,
-      recoverableDays: attributes === null || attributes === void 0 ? void 0 : attributes.recoverableDays,
-      recoveryLevel: attributes === null || attributes === void 0 ? void 0 : attributes.recoveryLevel,
+      expiresOn: attributes?.expires,
+      createdOn: attributes?.created,
+      updatedOn: attributes?.updated,
+      enabled: attributes?.enabled,
+      notBefore: attributes?.notBefore,
+      recoverableDays: attributes?.recoverableDays,
+      recoveryLevel: attributes?.recoveryLevel,
       id: secretBundle.id,
       contentType: secretBundle.contentType,
       tags: secretBundle.tags,
       managed: secretBundle.managed,
+      previousVersion: secretBundle.previousVersion,
       vaultUrl: parsedId.vaultUrl,
       version: parsedId.version,
       name: parsedId.name,
@@ -51703,40 +51730,27 @@ function mapPagedAsyncIterable(operation, operationOptions, mapper) {
   let iter = void 0;
   return {
     async next() {
-      iter !== null && iter !== void 0 ? iter : iter = operation(Object.assign(Object.assign({}, operationOptions), { maxresults: void 0 }));
+      iter ??= operation({ ...operationOptions, maxresults: void 0 });
       const result = await iter.next();
-      return Object.assign(Object.assign({}, result), { value: result.value && mapper(result.value) });
+      return {
+        ...result,
+        value: result.value && mapper(result.value)
+      };
     },
     [Symbol.asyncIterator]() {
       return this;
     },
-    byPage(settings) {
-      return __asyncGenerator(this, arguments, function* byPage_1() {
-        var _a5, e_1, _b3, _c3;
-        const iteratorByPage = operation(Object.assign(Object.assign({}, operationOptions), { maxresults: settings === null || settings === void 0 ? void 0 : settings.maxPageSize })).byPage(settings);
-        try {
-          for (var _d3 = true, iteratorByPage_1 = __asyncValues(iteratorByPage), iteratorByPage_1_1; iteratorByPage_1_1 = yield __await(iteratorByPage_1.next()), _a5 = iteratorByPage_1_1.done, !_a5; _d3 = true) {
-            _c3 = iteratorByPage_1_1.value;
-            _d3 = false;
-            const page = _c3;
-            yield yield __await(page.map(mapper));
-          }
-        } catch (e_1_1) {
-          e_1 = { error: e_1_1 };
-        } finally {
-          try {
-            if (!_d3 && !_a5 && (_b3 = iteratorByPage_1.return)) yield __await(_b3.call(iteratorByPage_1));
-          } finally {
-            if (e_1) throw e_1.error;
-          }
-        }
-      });
+    async *byPage(settings) {
+      const iteratorByPage = operation({
+        ...operationOptions,
+        maxresults: settings?.maxPageSize
+      }).byPage(settings);
+      for await (const page of iteratorByPage) {
+        yield page.map(mapper);
+      }
     }
   };
 }
-
-// node_modules/@azure/keyvault-secrets/dist/esm/constants.js
-var SDK_VERSION4 = "4.10.0";
 
 // node_modules/@azure/keyvault-secrets/dist/esm/tracing.js
 var tracingClient2 = createTracingClient({
@@ -51746,7 +51760,7 @@ var tracingClient2 = createTracingClient({
 });
 
 // node_modules/@azure/core-lro/dist/esm/logger.js
-var logger30 = createClientLogger("core-lro");
+var logger29 = createClientLogger("core-lro");
 
 // node_modules/@azure/core-lro/dist/esm/legacy/poller.js
 var PollerStoppedError = class _PollerStoppedError extends Error {
@@ -52063,10 +52077,10 @@ var Poller = class {
 
 // node_modules/@azure/keyvault-secrets/dist/esm/lro/keyVaultSecretPoller.js
 var KeyVaultSecretPoller = class extends Poller {
-  constructor() {
-    super(...arguments);
-    this.intervalInMs = 2e3;
-  }
+  /**
+   * Defines how much time the poller is going to wait before making a new request to the service.
+   */
+  intervalInMs = 2e3;
   /**
    * The method used by the poller to wait before attempting to update its operation.
    */
@@ -52075,9 +52089,10 @@ var KeyVaultSecretPoller = class extends Poller {
   }
 };
 var KeyVaultSecretPollOperation = class {
+  state;
+  cancelMessage = "";
   constructor(state3, options = {}) {
     this.state = state3;
-    this.cancelMessage = "";
     if (options.cancelMessage) {
       this.cancelMessage = options.cancelMessage;
     }
@@ -52108,6 +52123,9 @@ var KeyVaultSecretPollOperation = class {
 
 // node_modules/@azure/keyvault-secrets/dist/esm/lro/delete/operation.js
 var DeleteSecretPollOperation = class extends KeyVaultSecretPollOperation {
+  state;
+  client;
+  operationOptions;
   constructor(state3, client, operationOptions = {}) {
     super(state3, { cancelMessage: "Canceling the deletion of a secret is not supported." });
     this.state = state3;
@@ -52177,7 +52195,10 @@ var DeleteSecretPoller = class extends KeyVaultSecretPoller {
     if (resumeFrom) {
       state3 = JSON.parse(resumeFrom).state;
     }
-    const operation = new DeleteSecretPollOperation(Object.assign(Object.assign({}, state3), { name: name3 }), client, operationOptions);
+    const operation = new DeleteSecretPollOperation({
+      ...state3,
+      name: name3
+    }, client, operationOptions);
     super(operation);
     this.intervalInMs = intervalInMs;
   }
@@ -52185,6 +52206,9 @@ var DeleteSecretPoller = class extends KeyVaultSecretPoller {
 
 // node_modules/@azure/keyvault-secrets/dist/esm/lro/recover/operation.js
 var RecoverDeletedSecretPollOperation = class extends KeyVaultSecretPollOperation {
+  state;
+  client;
+  options;
   constructor(state3, client, options = {}) {
     super(state3, { cancelMessage: "Canceling the recovery of a deleted secret is not supported." });
     this.state = state3;
@@ -52224,7 +52248,7 @@ var RecoverDeletedSecretPollOperation = class extends KeyVaultSecretPollOperatio
       try {
         state3.result = (await this.getSecret(name3, this.options)).properties;
         state3.isCompleted = true;
-      } catch (_a5) {
+      } catch {
       }
       if (!state3.isCompleted) {
         state3.result = (await this.recoverDeletedSecret(name3, this.options)).properties;
@@ -52257,7 +52281,10 @@ var RecoverDeletedSecretPoller = class extends KeyVaultSecretPoller {
     if (resumeFrom) {
       state3 = JSON.parse(resumeFrom).state;
     }
-    const operation = new RecoverDeletedSecretPollOperation(Object.assign(Object.assign({}, state3), { name: name3 }), client, operationOptions);
+    const operation = new RecoverDeletedSecretPollOperation({
+      ...state3,
+      name: name3
+    }, client, operationOptions);
     super(operation);
     this.intervalInMs = intervalInMs;
   }
@@ -52265,6 +52292,14 @@ var RecoverDeletedSecretPoller = class extends KeyVaultSecretPoller {
 
 // node_modules/@azure/keyvault-secrets/dist/esm/index.js
 var SecretClient = class {
+  /**
+   * The base URL to the vault
+   */
+  vaultUrl;
+  /**
+   * A reference to the auto-generated KeyVault HTTP client.
+   */
+  client;
   /**
    * Creates an instance of SecretClient.
    *
@@ -52279,7 +52314,7 @@ var SecretClient = class {
    * const vaultName = "<YOUR KEYVAULT NAME>";
    * const url = `https://${vaultName}.vault.azure.net`;
    *
-   * // Lastly, create our keys client and connect to the service
+   * // Lastly, create our secrets client and connect to the service
    * const client = new SecretClient(url, credential);
    * ```
    * @param vaultUrl - The base URL to the vault. You should validate that this URL references a valid Key Vault resource. See https://aka.ms/azsdk/blog/vault-uri for details.
@@ -52288,26 +52323,29 @@ var SecretClient = class {
    *                          Omit this parameter to use the default pipeline configuration.
    */
   constructor(vaultUrl, credential, pipelineOptions = {}) {
-    var _a5, _b3;
     this.vaultUrl = vaultUrl;
-    const internalPipelineOptions = Object.assign(Object.assign({}, pipelineOptions), { userAgentOptions: {
-      userAgentPrefix: `${(_b3 = (_a5 = pipelineOptions.userAgentOptions) === null || _a5 === void 0 ? void 0 : _a5.userAgentPrefix) !== null && _b3 !== void 0 ? _b3 : ""} azsdk-js-keyvault-secrets/${SDK_VERSION4}`
-    }, apiVersion: pipelineOptions.serviceVersion || LATEST_API_VERSION, loggingOptions: {
-      logger: logger26.info,
-      additionalAllowedHeaderNames: [
-        "x-ms-keyvault-region",
-        "x-ms-keyvault-network-info",
-        "x-ms-keyvault-service-version"
-      ]
-    } });
+    const internalPipelineOptions = {
+      ...pipelineOptions,
+      userAgentOptions: {
+        userAgentPrefix: `${pipelineOptions.userAgentOptions?.userAgentPrefix ?? ""} azsdk-js-keyvault-secrets/${SDK_VERSION4}`
+      },
+      apiVersion: pipelineOptions.serviceVersion || LATEST_API_VERSION,
+      loggingOptions: {
+        logger: logger26.info,
+        additionalAllowedHeaderNames: [
+          "x-ms-keyvault-region",
+          "x-ms-keyvault-network-info",
+          "x-ms-keyvault-service-version"
+        ]
+      }
+    };
     this.client = new KeyVaultClient(this.vaultUrl, credential, internalPipelineOptions);
     this.client.pipeline.removePolicy({ name: bearerTokenAuthenticationPolicyName });
     this.client.pipeline.addPolicy(keyVaultAuthenticationPolicy(credential, pipelineOptions), {});
     this.client.pipeline.addPolicy({
       name: "ContentTypePolicy",
       sendRequest(request5, next) {
-        var _a6;
-        const contentType = (_a6 = request5.headers.get("Content-Type")) !== null && _a6 !== void 0 ? _a6 : "";
+        const contentType = request5.headers.get("Content-Type") ?? "";
         if (contentType.startsWith("application/json")) {
           request5.headers.set("Content-Type", "application/json");
         }
@@ -52343,9 +52381,9 @@ var SecretClient = class {
    * @param options - The optional parameters.
    */
   setSecret(secretName, value, options = {}) {
-    const { enabled: enabled3, notBefore, expiresOn: expires, tags } = options, remainingOptions = __rest(options, ["enabled", "notBefore", "expiresOn", "tags"]);
+    const { contentType, enabled: enabled3, notBefore, expiresOn: expires, tags, ...remainingOptions } = options;
     return tracingClient2.withSpan("SecretClient.setSecret", remainingOptions, async (updatedOptions) => {
-      const response = await this.client.setSecret(secretName, { value, secretAttributes: { enabled: enabled3, notBefore, expires }, tags }, updatedOptions);
+      const response = await this.client.setSecret(secretName, { value, contentType, secretAttributes: { enabled: enabled3, notBefore, expires }, tags }, updatedOptions);
       return getSecretFromSecretBundle(response);
     });
   }
@@ -52376,7 +52414,12 @@ var SecretClient = class {
    * @param options - The optional parameters.
    */
   async beginDeleteSecret(name3, options = {}) {
-    const poller = new DeleteSecretPoller(Object.assign(Object.assign({ name: name3, client: this.client }, options), { operationOptions: options }));
+    const poller = new DeleteSecretPoller({
+      name: name3,
+      client: this.client,
+      ...options,
+      operationOptions: options
+    });
     await poller.poll();
     return poller;
   }
@@ -52408,9 +52451,9 @@ var SecretClient = class {
    * @param options - The optional parameters.
    */
   async updateSecretProperties(secretName, secretVersion, options = {}) {
-    const { enabled: enabled3, notBefore, expiresOn: expires, tags } = options, remainingOptions = __rest(options, ["enabled", "notBefore", "expiresOn", "tags"]);
+    const { contentType, enabled: enabled3, notBefore, expiresOn: expires, tags, ...remainingOptions } = options;
     return tracingClient2.withSpan("SecretClient.updateSecretProperties", remainingOptions, async (updatedOptions) => {
-      const response = await this.client.updateSecret(secretName, secretVersion, { secretAttributes: { enabled: enabled3, notBefore, expires }, tags }, updatedOptions);
+      const response = await this.client.updateSecret(secretName, secretVersion, { contentType, secretAttributes: { enabled: enabled3, notBefore, expires }, tags }, updatedOptions);
       return getSecretFromSecretBundle(response).properties;
     });
   }
@@ -52548,7 +52591,12 @@ var SecretClient = class {
    * @param options - The optional parameters.
    */
   async beginRecoverDeletedSecret(name3, options = {}) {
-    const poller = new RecoverDeletedSecretPoller(Object.assign(Object.assign({ name: name3, client: this.client }, options), { operationOptions: options }));
+    const poller = new RecoverDeletedSecretPoller({
+      name: name3,
+      client: this.client,
+      ...options,
+      operationOptions: options
+    });
     await poller.poll();
     return poller;
   }
@@ -53007,7 +53055,7 @@ safe-buffer/index.js:
 @azure/msal-node/dist/client/ManagedIdentityApplication.mjs:
 @azure/msal-node/dist/cache/distributed/DistributedCachePlugin.mjs:
 @azure/msal-node/dist/index.mjs:
-  (*! @azure/msal-node v5.1.1 2026-03-18 *)
+  (*! @azure/msal-node v5.1.5 2026-04-28 *)
 
 @azure/msal-common/dist/utils/Constants.mjs:
 @azure/msal-common/dist/constants/AADServerParamKeys.mjs:
@@ -53039,16 +53087,16 @@ safe-buffer/index.js:
 @azure/msal-common/dist/telemetry/performance/PerformanceEvent.mjs:
 @azure/msal-common/dist/telemetry/performance/StubPerformanceClient.mjs:
 @azure/msal-common/dist/config/ClientConfiguration.mjs:
-@azure/msal-common/dist/error/ServerError.mjs:
-@azure/msal-common/dist/error/InteractionRequiredAuthErrorCodes.mjs:
-@azure/msal-common/dist/error/InteractionRequiredAuthError.mjs:
-@azure/msal-common/dist/utils/ProtocolUtils.mjs:
+@azure/msal-common/dist/cache/persistence/TokenCacheContext.mjs:
 @azure/msal-common/dist/utils/TimeUtils.mjs:
+@azure/msal-common/dist/cache/utils/CacheHelpers.mjs:
 @azure/msal-common/dist/telemetry/performance/PerformanceEvents.mjs:
 @azure/msal-common/dist/utils/FunctionWrappers.mjs:
 @azure/msal-common/dist/crypto/PopTokenGenerator.mjs:
-@azure/msal-common/dist/cache/persistence/TokenCacheContext.mjs:
-@azure/msal-common/dist/cache/utils/CacheHelpers.mjs:
+@azure/msal-common/dist/error/InteractionRequiredAuthErrorCodes.mjs:
+@azure/msal-common/dist/error/InteractionRequiredAuthError.mjs:
+@azure/msal-common/dist/error/ServerError.mjs:
+@azure/msal-common/dist/utils/ProtocolUtils.mjs:
 @azure/msal-common/dist/response/ResponseHandler.mjs:
 @azure/msal-common/dist/account/CcsCredential.mjs:
 @azure/msal-common/dist/utils/ClientAssertionUtils.mjs:
@@ -53070,6 +53118,6 @@ safe-buffer/index.js:
 @azure/msal-common/dist/error/AuthErrorCodes.mjs:
 @azure/msal-common/dist/telemetry/server/ServerTelemetryManager.mjs:
 @azure/msal-common/dist/index-node.mjs:
-  (*! @azure/msal-common v16.4.0 2026-03-18 *)
+  (*! @azure/msal-common v16.5.2 2026-04-28 *)
 */
 //# sourceMappingURL=index.js.map
