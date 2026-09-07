@@ -110,7 +110,7 @@
     "@actions/core": "^3.0.1",
     "@azure/identity": "^4.13.2",
     "@azure/keyvault-secrets": "^4.11.2",
-    "@types/node": "^26.2.0"
+    "@types/node": "^26.4.0"
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
